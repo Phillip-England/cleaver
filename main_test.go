@@ -2,84 +2,99 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
-	"strings"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
-func TestGeneratedKeyRoundTrip(t *testing.T) {
-	plain := []byte("account,balance\nchecking,42\n")
+func TestStaticHandlerServesIndex(t *testing.T) {
+	handler, err := staticHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	spec, keyText, err := keyForLock("")
-	if err != nil {
-		t.Fatal(err)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	locked, err := lockBytes(plain, spec, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, _, err := unlockBytes(locked, keyText)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("round trip mismatch: got %q", got)
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`<script src="/app.js" defer></script>`)) {
+		t.Fatal("index did not reference the client app")
 	}
 }
 
-func TestPassphraseRoundTrip(t *testing.T) {
-	plain := []byte("secret data")
-	spec := keySpec{passphrase: "correct horse battery staple"}
+func TestStaticHandlerServesClientAssets(t *testing.T) {
+	handler, err := staticHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	locked, err := lockBytes(plain, spec, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, _, err := unlockBytes(locked, spec.passphrase)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, plain) {
-		t.Fatalf("round trip mismatch: got %q", got)
-	}
-	if _, _, err := unlockBytes(locked, "wrong key"); err == nil {
-		t.Fatal("expected wrong key to fail")
+	for _, path := range []string{"/app.js", "/styles.css"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status %d", path, rec.Code)
+		}
+		if rec.Body.Len() == 0 {
+			t.Fatalf("%s was empty", path)
+		}
 	}
 }
 
-func TestCLIWritesExpectedFiles(t *testing.T) {
-	dir := t.TempDir()
-	input := filepath.Join(dir, "somefile.csv")
-	if err := os.WriteFile(input, []byte("a,b\n1,2\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	if err := run([]string{"lock", input}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-
-	lockPath := filepath.Join(dir, "somefile.lock")
-	keyPath := filepath.Join(dir, "somefile.key")
-	keyBytes, err := os.ReadFile(keyPath)
+func TestStaticHandlerFallsBackToIndexForBrowserRoutes(t *testing.T) {
+	handler, err := staticHandler()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(string(keyBytes)), keyPrefix) {
-		t.Fatalf("key file did not contain %s token", keyPrefix)
+
+	req := httptest.NewRequest(http.MethodGet, "/encrypt", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	if err := os.Remove(input); err != nil {
-		t.Fatal(err)
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`<title>Cleaver</title>`)) {
+		t.Fatal("fallback did not serve index")
 	}
-	if err := run([]string{"unlock", lockPath, keyPath}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(input)
+}
+
+func TestStaticHandlerServesIntroByDefault(t *testing.T) {
+	handler, err := staticHandler()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "a,b\n1,2\n" {
-		t.Fatalf("unexpected unlocked contents: %q", got)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.Bytes()
+	if !bytes.Contains(body, []byte(`What Cleaver Does`)) {
+		t.Fatal("index did not include the introduction page")
+	}
+	if !bytes.Contains(body, []byte(`data-tab="encrypt"`)) || !bytes.Contains(body, []byte(`data-tab="decrypt"`)) {
+		t.Fatal("index did not include encrypt and decrypt pages")
+	}
+}
+
+func TestStaticHandlerRejectsMutatingMethods(t *testing.T) {
+	handler, err := staticHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/encrypt", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status %d", rec.Code)
 	}
 }

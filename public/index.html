@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cleaver</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-shell header-inner">
+      <div>
+        <h1>Cleaver</h1>
+        <div class="hint">Portable file encryption for private handoffs</div>
+      </div>
+      <div class="header-actions">
+        <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme">Dark</button>
+        <div class="security-pill" aria-label="Application packaging">Self-contained binary</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <nav class="tabs" aria-label="Pages">
+      <button class="tab active" data-tab="intro" type="button">Intro</button>
+      <button class="tab" data-tab="encrypt" type="button">Encrypt</button>
+      <button class="tab" data-tab="decrypt" type="button">Decrypt</button>
+    </nav>
+
+    <section id="intro" class="screen active">
+      <div class="intro-layout">
+        <div class="intro-copy">
+          <p class="eyebrow">What Cleaver Does</p>
+          <h2>Encrypt a file into a lock file, then unlock it later with the PIN and shard files.</h2>
+          <p>
+            Cleaver runs as a tiny web app served by one Go binary. The file work happens in your browser with
+            Web Crypto: the app reads your selected file, creates encrypted output, and offers downloads for the
+            lock file, shard files, and recovery note.
+          </p>
+          <div class="intro-actions">
+            <button class="primary" data-tab-target="encrypt" type="button">Start encrypting</button>
+            <button class="secondary" data-tab-target="decrypt" type="button">Decrypt a lock file</button>
+          </div>
+        </div>
+
+        <div class="doc-panel" aria-label="How Cleaver works">
+          <h3>How It Works</h3>
+          <ol class="steps">
+            <li>
+              <strong>Choose a file.</strong>
+              Cleaver reads it in the browser and never needs an upload endpoint.
+            </li>
+            <li>
+              <strong>Enter a numeric PIN.</strong>
+              The PIN selects and combines random shard files to derive the AES key.
+            </li>
+            <li>
+              <strong>Download every output.</strong>
+              Keep the <code>.lock</code> file, digit shard files, and recovery note.
+            </li>
+            <li>
+              <strong>Decrypt later.</strong>
+              Provide the lock file, the same PIN, and the shard files to recover the original file.
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="docs-grid" aria-label="Operational notes">
+        <section class="doc-panel">
+          <h3>What To Keep</h3>
+          <p>Store the encrypted <code>.lock</code> file separately from the shard files. Anyone decrypting needs the lock file, the PIN, and all ten shard files.</p>
+        </section>
+        <section class="doc-panel">
+          <h3>What Cleaver Cannot Do</h3>
+          <p>Cleaver cannot recover a lost PIN, missing shard, corrupted lock file, or overwritten download. Treat the generated files as the only recovery material.</p>
+        </section>
+        <section class="doc-panel">
+          <h3>Deployment Shape</h3>
+          <p>The Go binary embeds the files in <code>public/</code> and serves them over HTTP. Build once, copy the binary, and run it with the address you want to expose.</p>
+        </section>
+      </div>
+    </section>
+
+    <section id="encrypt" class="screen">
+      <div class="page-head">
+        <h2>Encrypt File</h2>
+        <p>Choose any file and set a numeric PIN. Cleaver creates the encryption key randomly in your browser.</p>
+      </div>
+      <div class="two-column">
+        <form class="panel form-panel" id="encryptForm">
+          <div class="field">
+            <label for="encryptAsset">File</label>
+            <label class="dropzone" for="encryptAsset" id="encryptDropzone">
+              <span>Drop a file here</span>
+              <small>or choose a file</small>
+            </label>
+            <input class="file-input" id="encryptAsset" name="asset" type="file" required>
+            <div class="file-meta" id="encryptFileMeta">No file selected.</div>
+          </div>
+
+          <input type="hidden" name="mode" value="pin">
+          <div class="credential-card">Random key material is generated automatically. Your PIN and shard files are required to decrypt.</div>
+
+          <div class="field">
+            <label for="encryptPin">PIN</label>
+            <input class="input" id="encryptPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+          </div>
+
+          <button class="primary full" id="encryptSubmit" type="submit" disabled>Encrypt file</button>
+          <div class="status" id="encryptStatus" role="status"></div>
+        </form>
+
+        <div class="panel output-panel">
+          <h3>Downloads</h3>
+          <div class="downloads" id="encryptDownloads">
+            <div class="empty">Select a file and encrypt it. Your lock file and shards will appear here.</div>
+          </div>
+          <div class="warning">Cleaver cannot recover a lost PIN or missing shard files.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="decrypt" class="screen">
+      <div class="page-head">
+        <h2>Decrypt File</h2>
+        <p>Select a Cleaver lock file, then provide the PIN and shard files created during encryption.</p>
+      </div>
+      <div class="two-column">
+        <form class="panel form-panel" id="decryptForm">
+          <div class="field">
+            <label for="decryptAsset">Lock file</label>
+            <label class="dropzone" for="decryptAsset" id="decryptDropzone">
+              <span>Drop a lock file here</span>
+              <small>or choose a file</small>
+            </label>
+            <input class="file-input" id="decryptAsset" name="asset" type="file" required>
+            <div class="file-meta" id="decryptFileMeta">No lock file selected.</div>
+          </div>
+
+          <div class="credential-card" id="decryptCredentialSummary">Select a lock file to read its encryption metadata.</div>
+
+          <div class="field">
+            <label for="decryptPin">PIN</label>
+            <input class="input" id="decryptPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="decryptShards">Shard files</label>
+            <input class="input" id="decryptShards" name="shards" type="file" multiple>
+          </div>
+
+          <div class="actions split-actions">
+            <button class="secondary" id="clearCredentials" type="button">Clear credentials</button>
+            <button class="primary" id="decryptSubmit" type="submit" disabled>Decrypt file</button>
+          </div>
+          <div class="status" id="decryptStatus" role="status"></div>
+        </form>
+
+        <div class="panel output-panel">
+          <h3>Result</h3>
+          <div class="downloads" id="decryptDownloads">
+            <div class="empty">Your decrypted file will appear here after a successful decrypt.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
