@@ -12,8 +12,6 @@ Cleaver is a small web app for encrypting and decrypting files in the browser. A
 
 The bundle contains randomly ordered key records with opaque random identifiers instead of numbered shard files. CSV lock files can also be opened on the **Edit lock file** page. After the PIN and bundle are verified, export only a new `.lock` file that uses the same credentials and bundle.
 
-The **Alphabetize Markdown** page unlocks the same kind of paged Markdown lock entirely in the browser. It requires sections beginning with single `#` headings, rejects deeper Markdown headings and content before the first heading, sorts complete sections case-insensitively within each page, and exports a replacement `.lock` file protected by the same PIN and bundle.
-
 Cleaver cannot recover a lost PIN, missing bundle, or corrupted lock file.
 
 ## Build

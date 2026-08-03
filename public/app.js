@@ -7,7 +7,6 @@ const $ = (selector) => document.querySelector(selector);
 
 let decryptLockSupported = false;
 let editLockSupported = false;
-let alphabetizeLockSupported = false;
 let editorState = null;
 
 document.querySelectorAll(".tab").forEach((button) => {
@@ -20,7 +19,6 @@ document.querySelectorAll("[data-tab-target]").forEach((button) => {
 setupDropzone("encryptAsset", "encryptDropzone", "encryptFileMeta");
 setupDropzone("decryptAsset", "decryptDropzone", "decryptFileMeta", "decryptShards");
 setupDropzone("editAsset", "editDropzone", "editFileMeta", "editShards");
-setupDropzone("alphabetizeAsset", "alphabetizeDropzone", "alphabetizeFileMeta", "alphabetizeShards");
 
 $("#encryptAsset").addEventListener("change", syncEncryptSubmit);
 $("#encryptPin").addEventListener("input", syncEncryptSubmit);
@@ -35,14 +33,10 @@ $("#closeEditor").addEventListener("click", closeEditor);
 $("#exportLock").addEventListener("click", exportEditedLock);
 $("#addSheetRow").addEventListener("click", addSheetRow);
 $("#addSheetColumn").addEventListener("click", addSheetColumn);
-$("#alphabetizeAsset").addEventListener("change", inspectAlphabetizeLockFile);
-$("#alphabetizePin").addEventListener("input", syncAlphabetizeSubmit);
-$("#alphabetizeShards").addEventListener("change", syncAlphabetizeSubmit);
 
 syncEncryptSubmit();
 syncDecryptSubmit();
 syncEditSubmit();
-syncAlphabetizeSubmit();
 activateTab(tabFromHash());
 window.addEventListener("hashchange", () => activateTab(tabFromHash()));
 
@@ -126,36 +120,8 @@ $("#editForm").addEventListener("submit", async (event) => {
   }
 });
 
-$("#alphabetizeForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const status = $("#alphabetizeStatus");
-  setStatus(status, "Unlocking and alphabetizing Markdown sections...");
-  try {
-    const file = form.asset.files[0];
-    if (!file) throw new Error("Choose a Markdown lock file first.");
-    const decoded = decodeLock(new Uint8Array(await file.arrayBuffer()));
-    const originalName = decoded.header.original_name || stripLockExtension(file.name);
-    requireMarkdownName(originalName);
-    validatePin(form.pin.value);
-    const keyBytes = await keyFromShardFiles(form.shards.files, form.pin.value, decoded.header);
-    const plain = await unlockDecoded(decoded, keyBytes);
-    const { markdown, count } = alphabetizeMarkdownSections(decodeText(plain));
-    const locked = await lockBytes(textBytes(markdown), {
-      kind: "raw", keyBytes, pin: true, shardIds: decoded.header.shard_ids,
-    }, originalName);
-    renderDownloads($("#alphabetizeDownloads"), [asset(
-      alphabetizedLockName(originalName), locked, "Alphabetized Markdown lock file",
-      "Protected by the same PIN and key bundle.",
-    )]);
-    setStatus(status, `Alphabetized ${count} Markdown sections. The new lock file is ready.`);
-  } catch (error) {
-    setStatus(status, error.message, true);
-  }
-});
-
 function activateTab(name) {
-  if (!["intro", "encrypt", "decrypt", "edit", "alphabetize", "markdown-docs"].includes(name)) name = "intro";
+  if (!["intro", "encrypt", "decrypt", "edit"].includes(name)) name = "intro";
   document.querySelectorAll(".tab,.screen").forEach((el) => el.classList.remove("active"));
   document.querySelector(`.tab[data-tab="${name}"]`)?.classList.add("active");
   $("#" + name).classList.add("active");
@@ -204,7 +170,7 @@ function setupDropzone(inputId, zoneId, metaId, bundleInputId = "") {
     const file = input.files[0];
     meta.textContent = file
       ? `${file.name} - ${formatBytes(file.size)}${selectedBundle ? ` + ${selectedBundle.name}` : ""}`
-      : ["decryptAsset", "editAsset", "alphabetizeAsset"].includes(inputId) ? "No lock file selected." : "No file selected.";
+      : ["decryptAsset", "editAsset"].includes(inputId) ? "No lock file selected." : "No file selected.";
   });
 }
 
@@ -227,36 +193,6 @@ function syncDecryptSubmit() {
 function syncEditSubmit() {
   const form = $("#editForm");
   $("#editUnlockSubmit").disabled = !(editLockSupported && form.asset.files[0] && form.pin.value && form.shards.files.length);
-}
-
-function syncAlphabetizeSubmit() {
-  const form = $("#alphabetizeForm");
-  $("#alphabetizeSubmit").disabled = !(alphabetizeLockSupported && form.asset.files[0] && form.pin.value && form.shards.files.length);
-}
-
-async function inspectAlphabetizeLockFile() {
-  const form = $("#alphabetizeForm");
-  const file = form.asset.files[0];
-  alphabetizeLockSupported = false;
-  syncAlphabetizeSubmit();
-  if (!file) {
-    $("#alphabetizeCredentialSummary").textContent = "The Markdown must use titled page markers with sections beginning with single # headings.";
-    return;
-  }
-  try {
-    if (!file.name.toLowerCase().endsWith(".lock")) throw new Error("Choose a Cleaver .lock file.");
-    const decoded = decodeLock(new Uint8Array(await file.arrayBuffer()));
-    const originalName = decoded.header.original_name || stripLockExtension(file.name);
-    requireMarkdownName(originalName);
-    alphabetizeLockSupported = decoded.header.kdf === "pin-sha256";
-    if (!alphabetizeLockSupported) throw new Error("This lock uses an unsupported unlock method.");
-    $("#alphabetizeCredentialSummary").textContent = `${originalName} is ready. Enter its PIN and select its key bundle.`;
-    setStatus($("#alphabetizeStatus"), "Markdown lock metadata read. Ready for credentials.");
-  } catch (error) {
-    $("#alphabetizeCredentialSummary").textContent = "Only valid Cleaver locks containing Markdown files are supported.";
-    setStatus($("#alphabetizeStatus"), error.message, true);
-  }
-  syncAlphabetizeSubmit();
 }
 
 async function inspectEditLockFile() {
@@ -510,90 +446,10 @@ function decodeText(bytes) {
   }
 }
 
-function requireMarkdownName(name) {
-  if (!/\.(md|markdown)$/i.test(baseName(name))) {
-    throw new Error("This lock file does not contain a Markdown file.");
-  }
-}
-
 function requireCSVName(name) {
   if (!/\.csv$/i.test(baseName(name))) {
     throw new Error("This workflow requires a locked CSV file.");
   }
-}
-
-function parseMarkdownPages(text) {
-  const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-  const marker = /^\s*={3,}\s*$/;
-  const pages = [];
-  let index = 0;
-
-  while (index < lines.length && !lines[index].trim()) index++;
-  if (!marker.test(lines[index] || "")) {
-    throw new Error("Markdown must begin with a page marker: ===, a page title, and another === line.");
-  }
-
-  while (index < lines.length) {
-    if (!marker.test(lines[index] || "")) {
-      throw new Error(`Expected a page marker on line ${index + 1}.`);
-    }
-    const title = (lines[index + 1] || "").trim();
-    if (!title || marker.test(title)) throw new Error(`Page title on line ${index + 2} is missing.`);
-    if (!marker.test(lines[index + 2] || "")) {
-      throw new Error(`Page title "${title}" must be followed by a line of at least three equals signs.`);
-    }
-
-    const contentStart = index + 3;
-    index = contentStart;
-    while (index < lines.length && !marker.test(lines[index])) index++;
-    pages.push({ title, markdown: lines.slice(contentStart, index).join("\n").trim() });
-  }
-
-  return pages;
-}
-
-function alphabetizeMarkdownSections(text) {
-  const pages = parseMarkdownPages(text);
-  let count = 0;
-  const markdown = pages.map((page) => {
-    const alphabetized = alphabetizeMarkdownPage(page.markdown);
-    count += alphabetized.count;
-    return `===\n${page.title}\n===\n\n${alphabetized.markdown.trimEnd()}`;
-  }).join("\n\n") + "\n";
-  return { markdown, count };
-}
-
-function alphabetizeMarkdownPage(text) {
-  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
-  const lines = normalized.split("\n");
-  const sections = [];
-  let current = null;
-
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    const heading = line.match(/^#\s+(.+?)\s*#*\s*$/);
-    if (heading) {
-      const title = heading[1].trim();
-      if (!title) throw new Error(`Markdown heading on line ${index + 1} is empty.`);
-      current = { title, index: sections.length, lines: [line] };
-      sections.push(current);
-      continue;
-    }
-    if (/^#{2,6}(?:\s|$)/.test(line) || index > 0 && /^(?:=+|-+)\s*$/.test(line) && lines[index - 1].trim()) {
-      throw new Error(`Only single # headings are allowed (line ${index + 1}).`);
-    }
-    if (!current) {
-      if (line.trim()) throw new Error("Markdown content must begin with a # heading.");
-      continue;
-    }
-    current.lines.push(line);
-  }
-
-  if (!sections.length) throw new Error("The Markdown file has no # headings to alphabetize.");
-  const collator = new Intl.Collator(undefined, { sensitivity: "base", usage: "sort" });
-  sections.sort((left, right) => collator.compare(left.title, right.title) || left.index - right.index);
-  const markdown = sections.map((section) => section.lines.join("\n").trimEnd()).join("\n\n") + "\n";
-  return { markdown, count: sections.length };
 }
 
 function closeEditor() {
@@ -852,12 +708,6 @@ function outputName(name, ext) {
   const clean = baseName(name);
   const dot = clean.lastIndexOf(".");
   return (dot > 0 ? clean.slice(0, dot) : clean) + ext;
-}
-
-function alphabetizedLockName(name) {
-  const clean = baseName(name);
-  const dot = clean.lastIndexOf(".");
-  return (dot > 0 ? clean.slice(0, dot) : clean) + "-alphabetized.lock";
 }
 
 function stripLockExtension(name) {

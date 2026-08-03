@@ -7,6 +7,7 @@ RUN CGO_ENABLED=0 go build -o /cleaver .
 FROM scratch
 
 COPY --from=build /cleaver /cleaver
+WORKDIR /app
 EXPOSE 5544
 
 ENTRYPOINT ["/cleaver"]

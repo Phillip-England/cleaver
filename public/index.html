@@ -17,8 +17,6 @@
         <button class="tab" data-tab="encrypt" type="button">Encrypt</button>
         <button class="tab" data-tab="decrypt" type="button">Decrypt</button>
         <button class="tab" data-tab="edit" type="button">Edit</button>
-        <button class="tab" data-tab="alphabetize" type="button">Alphabetize</button>
-        <button class="tab" data-tab="markdown-docs" type="button">Guide</button>
       </nav>
       <button class="nav-cta" data-tab-target="encrypt" type="button">Secure a file</button>
     </div>
@@ -215,90 +213,11 @@
       </div>
     </section>
 
-    <section id="markdown-docs" class="screen">
-      <div class="page-head">
-        <h2>Markdown Document Format</h2>
-        <p>Format Markdown lock files as titled pages with sections that can be alphabetized.</p>
-      </div>
-      <div class="panel markdown-format-docs">
-        <h3>Page markers</h3>
-        <p>Every page, including the first, begins with a line of at least three equals signs, a title on its own line, and another equals-sign line.</p>
-        <pre><code>===
-FIRST PAGE
-===
-
-# Header
-
-- First copyable item
-- Second copyable item
-
-==========
-SECOND PAGE
-==========
-
-# Another Header
-
-- Another copyable item</code></pre>
-        <p>The opening and closing marker lengths do not need to match. A line containing three or more equals signs is reserved for page markers and should not appear in page content.</p>
-
-        <h3>Headings and copyable items</h3>
-        <p>Use <code># </code> for section headings. Put every value that should be independently copyable on a separate <code>- </code> list line. The spaces after <code>#</code> and <code>-</code> are required.</p>
-        <pre><code># Account Details
-
-- Plain text
-- **Important text**
-- [A link](https://example.com)
-- Run `example-command --option`</code></pre>
-
-        <h3>Alphabetizing</h3>
-        <p>Alphabetizing sorts <code>#</code> sections within each page without mixing sections between pages.</p>
-      </div>
-    </section>
-
-    <section id="alphabetize" class="screen">
-      <div class="page-head">
-        <h2>Alphabetize Markdown Sections</h2>
-        <p>Unlock a paged Markdown lock file, sort the <code>#</code> heading sections within each page, and export a new lock file using the same PIN and key bundle.</p>
-      </div>
-      <div class="two-column">
-        <form class="panel form-panel" id="alphabetizeForm">
-          <div class="field">
-            <label for="alphabetizeAsset">Markdown lock file and key bundle</label>
-            <label class="dropzone" for="alphabetizeAsset" id="alphabetizeDropzone">
-              <span>Drop a Markdown lock file and bundle here</span>
-              <small>or choose both files together</small>
-            </label>
-            <input class="file-input" id="alphabetizeAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
-            <div class="file-meta" id="alphabetizeFileMeta">No lock file selected.</div>
-          </div>
-          <div class="credential-card" id="alphabetizeCredentialSummary">The Markdown must use titled page markers with sections beginning with single <code>#</code> headings.</div>
-          <div class="field">
-            <label for="alphabetizePin">PIN</label>
-            <input class="input" id="alphabetizePin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="alphabetizeShards">Key bundle (if not selected above)</label>
-            <input class="input" id="alphabetizeShards" name="shards" type="file" multiple>
-          </div>
-          <button class="primary full" id="alphabetizeSubmit" type="submit" disabled>Alphabetize and export lock</button>
-          <div class="status" id="alphabetizeStatus" role="status"></div>
-        </form>
-        <div class="panel output-panel">
-          <h3>Alphabetized lock file</h3>
-          <div class="downloads" id="alphabetizeDownloads">
-            <div class="empty">The alphabetized Markdown will remain encrypted and appear here as a new lock file.</div>
-          </div>
-          <div class="warning">Section content stays attached to its heading. The original lock file is not changed.</div>
-        </div>
-      </div>
-    </section>
-
   </main>
 
   <footer class="site-footer">
     <div class="app-shell footer-inner">
       <div><strong>Cleaver</strong><span>Private file encryption, in your browser.</span></div>
-      <button data-tab-target="markdown-docs" type="button">Markdown guide</button>
     </div>
   </footer>
 

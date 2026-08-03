@@ -92,36 +92,6 @@ func TestStaticHandlerServesIntroByDefault(t *testing.T) {
 	if !bytes.Contains(body, []byte(`id="addSheetRow"`)) || !bytes.Contains(body, []byte(`id="addSheetColumn"`)) {
 		t.Fatal("index did not include spreadsheet row and column controls")
 	}
-	if !bytes.Contains(body, []byte(`data-tab="alphabetize"`)) || !bytes.Contains(body, []byte(`id="alphabetizeForm"`)) {
-		t.Fatal("index did not include the Markdown section alphabetizer")
-	}
-	if !bytes.Contains(body, []byte(`data-tab="markdown-docs"`)) || !bytes.Contains(body, []byte(`id="markdown-docs"`)) {
-		t.Fatal("index did not include the Markdown formatting guide")
-	}
-}
-
-func TestMarkdownAlphabetizerUsesExistingCredentials(t *testing.T) {
-	handler, err := staticHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	body := rec.Body.Bytes()
-	for _, text := range [][]byte{
-		[]byte(`alphabetizeMarkdownSections`),
-		[]byte(`alphabetizeMarkdownPage`),
-		[]byte(`Only single # headings are allowed`),
-		[]byte(`sensitivity: "base"`),
-		[]byte(`shardIds: decoded.header.shard_ids`),
-		[]byte(`alphabetizedLockName(originalName)`),
-	} {
-		if !bytes.Contains(body, text) {
-			t.Fatalf("Markdown alphabetizer logic did not include %q", text)
-		}
-	}
 }
 
 func TestCSVEditorUsesSpreadsheetWorkflow(t *testing.T) {
@@ -201,7 +171,7 @@ func TestLockWorkflowsAcceptLockAndBundleTogether(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()
-	for _, id := range []string{"decryptAsset", "editAsset", "alphabetizeAsset"} {
+	for _, id := range []string{"decryptAsset", "editAsset"} {
 		want := []byte(`id="` + id + `" name="asset" type="file" accept=".lock,.bundle" multiple`)
 		if !bytes.Contains(body, want) {
 			t.Fatalf("combined lock and bundle picker missing for %s", id)
