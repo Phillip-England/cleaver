@@ -10,9 +10,7 @@ Cleaver is a small web app for encrypting and decrypting files in the browser. A
 4. Download the encrypted `.lock` file and its single `.bundle` file.
 5. To decrypt, choose the `.lock` file, enter the same PIN, and provide the bundle.
 
-The bundle contains randomly ordered key records with opaque random identifiers instead of numbered shard files. UTF-8 text lock files can also be opened on the **Edit lock file** page. Paged Markdown files are edited one titled page at a time, can have new pages appended, and are reconstructed on export. After the PIN and bundle are verified, export only a new `.lock` file that uses the same credentials and bundle.
-
-The **Render Markdown lock** page accepts only `.lock` files whose recorded original filename ends in `.md` or `.markdown`. It unlocks the document in the browser, splits it into titled pages using the format documented in `DASHED_MARKDOWN_STYLE.md`, and sends each page's Markdown to the local Cleaver server, where Goldmark renders it in memory. The rendered HTML is returned to the page and is not stored.
+The bundle contains randomly ordered key records with opaque random identifiers instead of numbered shard files. CSV lock files can also be opened on the **Edit lock file** page. After the PIN and bundle are verified, export only a new `.lock` file that uses the same credentials and bundle.
 
 The **Alphabetize Markdown** page unlocks the same kind of paged Markdown lock entirely in the browser. It requires sections beginning with single `#` headings, rejects deeper Markdown headings and content before the first heading, sorts complete sections case-insensitively within each page, and exports a replacement `.lock` file protected by the same PIN and bundle.
 
@@ -28,6 +26,23 @@ go build -o cleaver .
 The binary includes the contents of `public/` through Go embed.
 
 ## Run
+
+Initialize local configuration and SQLite storage first:
+
+```sh
+./cleaver init
+```
+
+This creates `./config/.env` and `./data/main.sqlite`. The generated env file contains a placeholder admin account:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=change-me-now
+SESSION_SECRET=<generated-secret>
+DB_PATH=../data/main.sqlite
+```
+
+Change `ADMIN_PASSWORD` before any real deployment.
 
 ```sh
 ./cleaver
@@ -45,3 +60,17 @@ To expose a different address:
 ```sh
 ./cleaver -addr 127.0.0.1:5544
 ```
+
+## Admin Portal
+
+Public Cleaver pages remain available at `/`. The admin portal is available directly at `/login` and redirects protected admin routes to login when there is no valid signed session.
+
+After login, open `/admin` to:
+
+- upload arbitrary registry artifacts under operator-chosen names
+- download or delete stored artifacts
+- encrypt a source file into registry-stored lock and bundle artifacts
+- choose any two stored artifacts plus a PIN to attempt unlock
+- edit unlocked CSV files as a spreadsheet and relock back into the stored lock artifact
+
+Failed admin logins are tracked in SQLite by client IP for 24 hours. Five recent failures returns HTTP 403. Failed admin unlock attempts use a separate SQLite ledger with the same 24-hour, five-failure rule.

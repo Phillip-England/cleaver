@@ -17,7 +17,6 @@
         <button class="tab" data-tab="encrypt" type="button">Encrypt</button>
         <button class="tab" data-tab="decrypt" type="button">Decrypt</button>
         <button class="tab" data-tab="edit" type="button">Edit</button>
-        <button class="tab" data-tab="render" type="button">Render</button>
         <button class="tab" data-tab="alphabetize" type="button">Alphabetize</button>
         <button class="tab" data-tab="markdown-docs" type="button">Guide</button>
       </nav>
@@ -85,17 +84,17 @@
     <section id="encrypt" class="screen">
       <div class="page-head">
         <h2>Encrypt File</h2>
-        <p>Choose any file and set a numeric PIN. Cleaver creates the encryption key randomly in your browser.</p>
+        <p>Choose a CSV file and set a numeric PIN. Cleaver creates the encryption key randomly in your browser.</p>
       </div>
       <div class="two-column">
         <form class="panel form-panel" id="encryptForm">
           <div class="field">
             <label for="encryptAsset">File</label>
             <label class="dropzone" for="encryptAsset" id="encryptDropzone">
-              <span>Drop a file here</span>
+              <span>Drop a CSV file here</span>
               <small>or choose a file</small>
             </label>
-            <input class="file-input" id="encryptAsset" name="asset" type="file" required>
+            <input class="file-input" id="encryptAsset" name="asset" type="file" accept=".csv,text/csv" required>
             <div class="file-meta" id="encryptFileMeta">No file selected.</div>
           </div>
 
@@ -168,7 +167,7 @@
     <section id="edit" class="screen">
       <div class="page-head">
         <h2>Edit Lock File</h2>
-        <p>Unlock a text file in your browser. Paged Markdown files can be edited one page at a time, then exported with the same PIN and key bundle.</p>
+        <p>Unlock a CSV file in your browser, edit it as a spreadsheet, then export a new locked CSV with the same PIN and key bundle.</p>
       </div>
 
       <form class="panel edit-unlock" id="editForm">
@@ -187,7 +186,7 @@
             <input class="input" id="editPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
             <label for="editShards">Key bundle (if not selected above)</label>
             <input class="input" id="editShards" name="shards" type="file" multiple>
-            <button class="primary" id="editUnlockSubmit" type="submit" disabled>Unlock and edit</button>
+            <button class="primary" id="editUnlockSubmit" type="submit" disabled>Unlock spreadsheet</button>
           </div>
         </div>
         <div class="status" id="editStatus" role="status"></div>
@@ -196,7 +195,7 @@
       <div class="text-workspace" id="textWorkspace" hidden>
         <div class="editor-toolbar">
           <div>
-            <h3 id="editorTitle">Text editor</h3>
+            <h3 id="editorTitle">Spreadsheet editor</h3>
             <div class="hint" id="editorMeta">Changes stay in this browser until export</div>
           </div>
           <div class="actions">
@@ -204,76 +203,22 @@
             <button class="primary" id="exportLock" type="button">Export new lock file</button>
           </div>
         </div>
-        <nav class="editor-page-navigation" id="editorPageNavigation" aria-label="Markdown pages" hidden>
-          <div class="editor-page-navigation-head">
-            <strong>Edit page</strong>
-            <button class="secondary" id="addEditorPage" type="button">Add page</button>
-          </div>
-          <div class="editor-page-navigation-links" id="editorPageNavigationLinks" role="tablist"></div>
-        </nav>
-        <div class="editor-page-title" id="editorPageTitleField" hidden>
-          <label for="editorPageTitle">Page title</label>
-          <input class="input" id="editorPageTitle" type="text" autocomplete="off">
+        <div class="sheet-actions">
+          <button class="secondary" id="addSheetRow" type="button">Add row</button>
+          <button class="secondary" id="addSheetColumn" type="button">Add column</button>
         </div>
-        <textarea id="textEditor" class="text-editor" spellcheck="false" aria-label="File contents"></textarea>
+        <div class="spreadsheet-scroll" id="spreadsheetScroll">
+          <table class="spreadsheet" id="spreadsheetGrid" aria-label="CSV spreadsheet"></table>
+        </div>
         <div class="status" id="exportStatus" role="status"></div>
         <div class="downloads" id="editDownloads"></div>
-      </div>
-    </section>
-
-    <section id="render" class="screen">
-      <div class="page-head">
-        <h2>Render Markdown Lock File</h2>
-        <p>Unlock a Markdown file stored in a Cleaver lock, then render it as a document with Goldmark.</p>
-      </div>
-      <div class="two-column">
-        <form class="panel form-panel" id="renderForm">
-          <div class="field">
-            <label for="renderAsset">Markdown lock file and key bundle</label>
-            <label class="dropzone" for="renderAsset" id="renderDropzone">
-              <span>Drop a Markdown lock file and bundle here</span>
-              <small>or choose both files together</small>
-            </label>
-            <input class="file-input" id="renderAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
-            <div class="file-meta" id="renderFileMeta">No lock file selected.</div>
-          </div>
-          <div class="credential-card" id="renderCredentialSummary">Only lock files whose original file is Markdown can be rendered.</div>
-          <div class="field">
-            <label for="renderPin">PIN</label>
-            <input class="input" id="renderPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="renderShards">Key bundle (if not selected above)</label>
-            <input class="input" id="renderShards" name="shards" type="file" multiple>
-          </div>
-          <button class="primary full" id="renderSubmit" type="submit" disabled>Unlock and render</button>
-          <div class="status" id="renderStatus" role="status"></div>
-        </form>
-        <div class="panel output-panel render-output-panel">
-          <h3 id="renderTitle">Rendered document</h3>
-          <div class="render-document-layout">
-            <aside class="render-document-sidebar" id="renderDocumentSidebar" hidden>
-              <nav class="render-page-navigation" id="renderPageNavigation" aria-label="Document pages">
-                <strong>Pages</strong>
-                <div class="render-page-navigation-links" id="renderPageNavigationLinks" role="tablist"></div>
-              </nav>
-              <div id="renderSectionNavigations"></div>
-            </aside>
-            <article class="markdown-body" id="renderOutput">
-              <div class="empty">The rendered Markdown document will appear here.</div>
-            </article>
-          </div>
-          <div class="warning">
-            Rendering sends the unlocked Markdown to this Cleaver server. It is processed in memory and is not stored.
-          </div>
-        </div>
       </div>
     </section>
 
     <section id="markdown-docs" class="screen">
       <div class="page-head">
         <h2>Markdown Document Format</h2>
-        <p>Format Markdown lock files as titled pages containing copyable dashed list items.</p>
+        <p>Format Markdown lock files as titled pages with sections that can be alphabetized.</p>
       </div>
       <div class="panel markdown-format-docs">
         <h3>Page markers</h3>
@@ -305,11 +250,8 @@ SECOND PAGE
 - [A link](https://example.com)
 - Run `example-command --option`</code></pre>
 
-        <h3>Rendered navigation</h3>
-        <p>Page titles become page tabs. Each page also gets its own navigation for its <code>#</code> headings, and every rendered list item gets a Copy button.</p>
-
-        <h3>Editing and alphabetizing</h3>
-        <p>The editor presents one tab per page and allows its title and Markdown body to be edited independently. Alphabetizing sorts <code>#</code> sections within each page without mixing sections between pages.</p>
+        <h3>Alphabetizing</h3>
+        <p>Alphabetizing sorts <code>#</code> sections within each page without mixing sections between pages.</p>
       </div>
     </section>
 

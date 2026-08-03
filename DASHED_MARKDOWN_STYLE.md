@@ -1,6 +1,6 @@
 # Dashed Markdown Style
 
-This document defines the Markdown format expected by applications that produce content for Cleaver's rendered Markdown UI.
+This document defines the paged Markdown format expected by Cleaver's Markdown alphabetizer.
 
 ## Required page structure
 
@@ -44,9 +44,7 @@ SERVERS
 - Development server information
 ```
 
-Cleaver uses these titles for the rendered page navigation. Each page also receives its own navigation for the level-one headings it contains.
-
-When a paged Markdown lock is opened in Cleaver's editor, the same titles become editor tabs. Editing is scoped to the selected page, and changing the page-title field updates the title written between its marker lines. Exporting reconstructs all pages into one Markdown document.
+Cleaver keeps these page titles in place while sorting the level-one heading sections inside each page.
 
 ## Headings and list items
 
@@ -105,8 +103,6 @@ RESOURCES
 - Run `example-command --option`
 ```
 
-When Cleaver renders the document, every dashed list item receives its own copy button. The button copies the readable text of that item rather than its Markdown punctuation.
-
 ## Complete template
 
 ```markdown
@@ -132,5 +128,5 @@ Applications generating this format should:
 - Never use a line of three or more equals signs as ordinary page content.
 - Put a space between `#` and the heading text.
 - Put a space between `-` and the list-item content.
-- Keep each copyable value in its own list item.
+- Keep each value in its own list item.
 - Use another level-one heading to begin a new section.

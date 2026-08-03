@@ -7,7 +7,6 @@ const $ = (selector) => document.querySelector(selector);
 
 let decryptLockSupported = false;
 let editLockSupported = false;
-let renderLockSupported = false;
 let alphabetizeLockSupported = false;
 let editorState = null;
 
@@ -21,7 +20,6 @@ document.querySelectorAll("[data-tab-target]").forEach((button) => {
 setupDropzone("encryptAsset", "encryptDropzone", "encryptFileMeta");
 setupDropzone("decryptAsset", "decryptDropzone", "decryptFileMeta", "decryptShards");
 setupDropzone("editAsset", "editDropzone", "editFileMeta", "editShards");
-setupDropzone("renderAsset", "renderDropzone", "renderFileMeta", "renderShards");
 setupDropzone("alphabetizeAsset", "alphabetizeDropzone", "alphabetizeFileMeta", "alphabetizeShards");
 
 $("#encryptAsset").addEventListener("change", syncEncryptSubmit);
@@ -35,11 +33,8 @@ $("#editPin").addEventListener("input", syncEditSubmit);
 $("#editShards").addEventListener("change", syncEditSubmit);
 $("#closeEditor").addEventListener("click", closeEditor);
 $("#exportLock").addEventListener("click", exportEditedLock);
-$("#addEditorPage").addEventListener("click", addEditorPage);
-$("#editorPageTitle").addEventListener("input", syncEditorPageTitle);
-$("#renderAsset").addEventListener("change", inspectRenderLockFile);
-$("#renderPin").addEventListener("input", syncRenderSubmit);
-$("#renderShards").addEventListener("change", syncRenderSubmit);
+$("#addSheetRow").addEventListener("click", addSheetRow);
+$("#addSheetColumn").addEventListener("click", addSheetColumn);
 $("#alphabetizeAsset").addEventListener("change", inspectAlphabetizeLockFile);
 $("#alphabetizePin").addEventListener("input", syncAlphabetizeSubmit);
 $("#alphabetizeShards").addEventListener("change", syncAlphabetizeSubmit);
@@ -47,7 +42,6 @@ $("#alphabetizeShards").addEventListener("change", syncAlphabetizeSubmit);
 syncEncryptSubmit();
 syncDecryptSubmit();
 syncEditSubmit();
-syncRenderSubmit();
 syncAlphabetizeSubmit();
 activateTab(tabFromHash());
 window.addEventListener("hashchange", () => activateTab(tabFromHash()));
@@ -62,6 +56,7 @@ $("#encryptForm").addEventListener("submit", async (event) => {
   try {
     const file = form.asset.files[0];
     if (!file) throw new Error("Choose a file first.");
+    requireCSVName(file.name);
     const plain = new Uint8Array(await file.arrayBuffer());
     const assets = await encryptWithPinAssets(plain, file.name, form.pin.value);
     renderDownloads(downloads, assets);
@@ -108,60 +103,26 @@ $("#editForm").addEventListener("submit", async (event) => {
     const keyBytes = await keyFromShardFiles(form.shards.files, form.pin.value, decoded.header);
     const plain = await unlockDecoded(decoded, keyBytes);
     const originalName = decoded.header.original_name || stripLockExtension(file.name);
+    requireCSVName(originalName);
     const text = decodeText(plain);
-    const paged = /\.(md|markdown)$/i.test(baseName(originalName));
-    const pages = paged ? parseMarkdownPages(text) : [{ title: originalName, markdown: text }];
+    const rows = normalizeCSVRows(parseCSV(text));
     editorState = {
       keyBytes,
       shardIds: decoded.header.shard_ids,
       originalName,
-      paged,
-      pages,
-      activePageIndex: 0,
+      rows,
     };
     form.pin.value = "";
     form.shards.value = "";
-    renderEditorPages();
+    renderSpreadsheet();
     $("#textWorkspace").hidden = false;
     $("#editForm").hidden = true;
     $("#editorTitle").textContent = originalName;
+    updateSpreadsheetMeta();
     setStatus($("#editStatus"), "");
     $("#textWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     setStatus($("#editStatus"), error.message, true);
-  }
-});
-
-$("#renderForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const status = $("#renderStatus");
-  setStatus(status, "Unlocking and rendering Markdown...");
-  try {
-    const file = form.asset.files[0];
-    if (!file) throw new Error("Choose a Markdown lock file first.");
-    const decoded = decodeLock(new Uint8Array(await file.arrayBuffer()));
-    const originalName = decoded.header.original_name || stripLockExtension(file.name);
-    requireMarkdownName(originalName);
-    validatePin(form.pin.value);
-    const keyBytes = await keyFromShardFiles(form.shards.files, form.pin.value, decoded.header);
-    const plain = await unlockDecoded(decoded, keyBytes);
-    const pages = parseMarkdownPages(decodeText(plain));
-    const renderedPages = await Promise.all(pages.map(async (page) => {
-      const response = await fetch("/api/render", {
-        method: "POST",
-        headers: { "Content-Type": "text/markdown; charset=utf-8" },
-        body: page.markdown,
-      });
-      if (!response.ok) throw new Error((await response.text()).trim() || "Markdown rendering failed.");
-      return { ...page, html: await response.text() };
-    }));
-    renderMarkdownPages(renderedPages);
-    $("#renderTitle").textContent = originalName;
-    makeRenderedListItemsCopyable();
-    setStatus(status, `Markdown rendered as ${pages.length} ${pages.length === 1 ? "page" : "pages"}.`);
-  } catch (error) {
-    setStatus(status, error.message, true);
   }
 });
 
@@ -194,7 +155,7 @@ $("#alphabetizeForm").addEventListener("submit", async (event) => {
 });
 
 function activateTab(name) {
-  if (!["intro", "encrypt", "decrypt", "edit", "render", "alphabetize", "markdown-docs"].includes(name)) name = "intro";
+  if (!["intro", "encrypt", "decrypt", "edit", "alphabetize", "markdown-docs"].includes(name)) name = "intro";
   document.querySelectorAll(".tab,.screen").forEach((el) => el.classList.remove("active"));
   document.querySelector(`.tab[data-tab="${name}"]`)?.classList.add("active");
   $("#" + name).classList.add("active");
@@ -243,7 +204,7 @@ function setupDropzone(inputId, zoneId, metaId, bundleInputId = "") {
     const file = input.files[0];
     meta.textContent = file
       ? `${file.name} - ${formatBytes(file.size)}${selectedBundle ? ` + ${selectedBundle.name}` : ""}`
-      : ["decryptAsset", "editAsset", "renderAsset", "alphabetizeAsset"].includes(inputId) ? "No lock file selected." : "No file selected.";
+      : ["decryptAsset", "editAsset", "alphabetizeAsset"].includes(inputId) ? "No lock file selected." : "No file selected.";
   });
 }
 
@@ -266,11 +227,6 @@ function syncDecryptSubmit() {
 function syncEditSubmit() {
   const form = $("#editForm");
   $("#editUnlockSubmit").disabled = !(editLockSupported && form.asset.files[0] && form.pin.value && form.shards.files.length);
-}
-
-function syncRenderSubmit() {
-  const form = $("#renderForm");
-  $("#renderSubmit").disabled = !(renderLockSupported && form.asset.files[0] && form.pin.value && form.shards.files.length);
 }
 
 function syncAlphabetizeSubmit() {
@@ -303,39 +259,16 @@ async function inspectAlphabetizeLockFile() {
   syncAlphabetizeSubmit();
 }
 
-async function inspectRenderLockFile() {
-  const form = $("#renderForm");
-  const file = form.asset.files[0];
-  renderLockSupported = false;
-  syncRenderSubmit();
-  if (!file) {
-    $("#renderCredentialSummary").textContent = "Only lock files whose original file is Markdown can be rendered.";
-    return;
-  }
-  try {
-    if (!file.name.toLowerCase().endsWith(".lock")) throw new Error("Choose a Cleaver .lock file.");
-    const decoded = decodeLock(new Uint8Array(await file.arrayBuffer()));
-    const originalName = decoded.header.original_name || stripLockExtension(file.name);
-    requireMarkdownName(originalName);
-    renderLockSupported = decoded.header.kdf === "pin-sha256";
-    if (!renderLockSupported) throw new Error("This lock uses an unsupported unlock method.");
-    $("#renderCredentialSummary").textContent = `${originalName} is a Markdown lock. Enter its PIN and select its key bundle.`;
-    setStatus($("#renderStatus"), "Markdown lock metadata read. Ready for credentials.");
-  } catch (error) {
-    $("#renderCredentialSummary").textContent = "Only valid Cleaver locks containing Markdown files are supported.";
-    setStatus($("#renderStatus"), error.message, true);
-  }
-  syncRenderSubmit();
-}
-
 async function inspectEditLockFile() {
   const file = $("#editForm").asset.files[0];
   editLockSupported = false;
   if (!file) return syncEditSubmit();
   try {
+    if (!file.name.toLowerCase().endsWith(".lock")) throw new Error("Choose a Cleaver .lock file.");
     const decoded = decodeLock(new Uint8Array(await file.arrayBuffer()));
+    requireCSVName(decoded.header.original_name || stripLockExtension(file.name));
     editLockSupported = decoded.header.kdf === "pin-sha256";
-    setStatus($("#editStatus"), editLockSupported ? `${decoded.header.original_name || stripLockExtension(file.name)} is ready for credentials.` : "This lock uses an unsupported unlock method.", !editLockSupported);
+    setStatus($("#editStatus"), editLockSupported ? `${decoded.header.original_name || stripLockExtension(file.name)} is ready for spreadsheet editing.` : "This lock uses an unsupported unlock method.", !editLockSupported);
   } catch (error) {
     setStatus($("#editStatus"), error.message, true);
   }
@@ -583,6 +516,12 @@ function requireMarkdownName(name) {
   }
 }
 
+function requireCSVName(name) {
+  if (!/\.csv$/i.test(baseName(name))) {
+    throw new Error("This workflow requires a locked CSV file.");
+  }
+}
+
 function parseMarkdownPages(text) {
   const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
   const marker = /^\s*={3,}\s*$/;
@@ -611,133 +550,6 @@ function parseMarkdownPages(text) {
   }
 
   return pages;
-}
-
-function renderMarkdownPages(pages) {
-  const output = $("#renderOutput");
-  const sidebar = $("#renderDocumentSidebar");
-  const pageLinks = $("#renderPageNavigationLinks");
-  const sectionNavigations = $("#renderSectionNavigations");
-  output.replaceChildren();
-  pageLinks.replaceChildren();
-  sectionNavigations.replaceChildren();
-
-  pages.forEach((page, pageIndex) => {
-    const panel = document.createElement("section");
-    panel.className = "rendered-page";
-    panel.id = `rendered-page-${pageIndex + 1}`;
-    panel.setAttribute("role", "tabpanel");
-    panel.setAttribute("aria-label", page.title);
-    panel.hidden = pageIndex !== 0;
-
-    const title = document.createElement("h2");
-    title.className = "rendered-page-title";
-    title.textContent = page.title;
-    const contents = document.createElement("div");
-    contents.className = "rendered-page-contents";
-    contents.innerHTML = page.html;
-    panel.append(title, contents);
-    output.append(panel);
-
-    const sectionNavigation = buildRenderNavigation(contents, pageIndex);
-    sectionNavigation.hidden = pageIndex !== 0 || sectionNavigation.hidden;
-    sectionNavigations.append(sectionNavigation);
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "render-page-tab";
-    button.textContent = page.title;
-    button.setAttribute("role", "tab");
-    button.setAttribute("aria-controls", panel.id);
-    button.setAttribute("aria-selected", String(pageIndex === 0));
-    button.addEventListener("click", () => activateRenderedPage(pageIndex));
-    pageLinks.append(button);
-  });
-
-  sidebar.hidden = pages.length === 0;
-}
-
-function activateRenderedPage(activeIndex) {
-  $("#renderOutput").querySelectorAll(".rendered-page").forEach((page, index) => {
-    page.hidden = index !== activeIndex;
-  });
-  $("#renderPageNavigationLinks").querySelectorAll(".render-page-tab").forEach((button, index) => {
-    button.setAttribute("aria-selected", String(index === activeIndex));
-  });
-  $("#renderSectionNavigations").querySelectorAll(".render-navigation").forEach((navigation, index) => {
-    navigation.hidden = index !== activeIndex || navigation.dataset.empty === "true";
-  });
-}
-
-function buildRenderNavigation(contents, pageIndex) {
-  const navigation = document.createElement("nav");
-  const headings = Array.from(contents.querySelectorAll("h1"));
-  navigation.className = "render-navigation";
-  navigation.dataset.empty = String(headings.length === 0);
-  navigation.setAttribute("aria-label", "Sections on this page");
-  const label = document.createElement("strong");
-  label.textContent = "On this page";
-  const links = document.createElement("div");
-  links.className = "render-navigation-links";
-
-  headings.forEach((heading, index) => {
-    const id = `document-page-${pageIndex + 1}-section-${index + 1}`;
-    heading.id = id;
-    heading.tabIndex = -1;
-    const link = document.createElement("a");
-    link.href = `#${id}`;
-    link.textContent = heading.textContent.trim() || `Section ${index + 1}`;
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      heading.scrollIntoView({ behavior: "smooth", block: "start" });
-      heading.focus({ preventScroll: true });
-    });
-    links.append(link);
-  });
-
-  navigation.append(label, links);
-  navigation.hidden = headings.length === 0;
-  return navigation;
-}
-
-function makeRenderedListItemsCopyable() {
-  const items = $("#renderOutput").querySelectorAll("li");
-  items.forEach((item) => {
-    const copyText = item.textContent.trim();
-    const button = document.createElement("button");
-    button.className = "copy-list-item";
-    button.type = "button";
-    button.textContent = "Copy";
-    button.setAttribute("aria-label", `Copy list item: ${copyText}`);
-    button.addEventListener("click", async () => {
-      try {
-        await copyTextToClipboard(copyText);
-        button.textContent = "Copied";
-        window.setTimeout(() => { button.textContent = "Copy"; }, 1500);
-      } catch {
-        button.textContent = "Copy failed";
-        window.setTimeout(() => { button.textContent = "Copy"; }, 1500);
-      }
-    });
-    item.append(button);
-  });
-}
-
-async function copyTextToClipboard(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const input = document.createElement("textarea");
-  input.value = text;
-  input.setAttribute("readonly", "");
-  input.className = "clipboard-fallback";
-  document.body.append(input);
-  input.select();
-  const copied = document.execCommand("copy");
-  input.remove();
-  if (!copied) throw new Error("Clipboard copy failed.");
 }
 
 function alphabetizeMarkdownSections(text) {
@@ -786,11 +598,7 @@ function alphabetizeMarkdownPage(text) {
 
 function closeEditor() {
   editorState = null;
-  $("#textEditor").value = "";
-  $("#editorPageTitle").value = "";
-  $("#editorPageNavigationLinks").replaceChildren();
-  $("#editorPageNavigation").hidden = true;
-  $("#editorPageTitleField").hidden = true;
+  $("#spreadsheetGrid").replaceChildren();
   $("#textWorkspace").hidden = true;
   $("#editForm").hidden = false;
   $("#editForm").reset();
@@ -802,115 +610,208 @@ function closeEditor() {
 
 async function exportEditedLock() {
   if (!editorState) return;
-  setStatus($("#exportStatus"), "Encrypting edited text...");
+  setStatus($("#exportStatus"), "Encrypting edited CSV...");
   try {
-    saveActiveEditorPage();
-    const text = editorState.paged ? serializeMarkdownPages(editorState.pages) : editorState.pages[0].markdown;
+    const text = serializeCSV(editorState.rows);
     const plain = textBytes(text);
     const locked = await lockBytes(plain, { kind: "raw", keyBytes: editorState.keyBytes, pin: true, shardIds: editorState.shardIds }, editorState.originalName);
     const name = outputName(editorState.originalName, ".lock");
-    renderDownloads($("#editDownloads"), [asset(name, locked, "Edited lock file", "Protected by the same PIN and key bundle.")]);
+    renderDownloads($("#editDownloads"), [asset(name, locked, "Edited CSV lock file", "Protected by the same PIN and key bundle.")]);
     setStatus($("#exportStatus"), "New lock file ready. Your original lock file was not changed.");
   } catch (error) {
     setStatus($("#exportStatus"), error.message, true);
   }
 }
 
-function renderEditorPages() {
-  const navigation = $("#editorPageNavigation");
-  const links = $("#editorPageNavigationLinks");
-  links.replaceChildren();
-  navigation.hidden = !editorState.paged;
-  $("#editorPageTitleField").hidden = !editorState.paged;
+function renderSpreadsheet(focusRow = 0, focusCol = 0) {
+  if (!editorState) return;
+  const grid = $("#spreadsheetGrid");
+  grid.replaceChildren();
+  const rows = editorState.rows;
+  const columnCount = rows[0]?.length || 1;
 
-  if (editorState.paged) {
-    editorState.pages.forEach((page, index) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "editor-page-tab";
-      button.textContent = page.title;
-      button.setAttribute("role", "tab");
-      button.setAttribute("aria-selected", String(index === editorState.activePageIndex));
-      button.addEventListener("click", () => activateEditorPage(index));
-      links.append(button);
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headRow.append(document.createElement("th"));
+  for (let col = 0; col < columnCount; col++) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = spreadsheetColumnName(col);
+    headRow.append(th);
+  }
+  thead.append(headRow);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((row, rowIndex) => {
+    const tr = document.createElement("tr");
+    const rowHead = document.createElement("th");
+    rowHead.scope = "row";
+    rowHead.textContent = String(rowIndex + 1);
+    tr.append(rowHead);
+    row.forEach((cell, colIndex) => {
+      const td = document.createElement("td");
+      const input = document.createElement("input");
+      input.className = "sheet-cell";
+      input.value = cell;
+      input.dataset.row = String(rowIndex);
+      input.dataset.col = String(colIndex);
+      input.setAttribute("aria-label", `${spreadsheetColumnName(colIndex)}${rowIndex + 1}`);
+      input.addEventListener("input", updateSpreadsheetCell);
+      input.addEventListener("keydown", handleSpreadsheetKeydown);
+      td.append(input);
+      tr.append(td);
     });
-  }
-
-  loadActiveEditorPage();
-}
-
-function activateEditorPage(index) {
-  if (!editorState || index === editorState.activePageIndex) return;
-  try {
-    saveActiveEditorPage();
-  } catch (error) {
-    setStatus($("#exportStatus"), error.message, true);
-    return;
-  }
-  editorState.activePageIndex = index;
-  $("#editorPageNavigationLinks").querySelectorAll(".editor-page-tab").forEach((button, buttonIndex) => {
-    button.setAttribute("aria-selected", String(buttonIndex === index));
+    tbody.append(tr);
   });
-  loadActiveEditorPage();
-  setStatus($("#exportStatus"), "");
+
+  grid.append(thead, tbody);
+  updateSpreadsheetMeta();
+  focusSpreadsheetCell(Math.min(focusRow, rows.length - 1), Math.min(focusCol, columnCount - 1));
 }
 
-function addEditorPage() {
-  if (!editorState?.paged) return;
-  try {
-    saveActiveEditorPage();
-  } catch (error) {
-    setStatus($("#exportStatus"), error.message, true);
-    return;
+function updateSpreadsheetCell(event) {
+  const row = Number(event.currentTarget.dataset.row);
+  const col = Number(event.currentTarget.dataset.col);
+  editorState.rows[row][col] = event.currentTarget.value;
+}
+
+function handleSpreadsheetKeydown(event) {
+  const input = event.currentTarget;
+  const row = Number(input.dataset.row);
+  const col = Number(input.dataset.col);
+  let nextRow = row;
+  let nextCol = col;
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    nextRow = event.shiftKey ? row - 1 : row + 1;
+  } else if (event.key === "Tab") {
+    event.preventDefault();
+    nextCol = event.shiftKey ? col - 1 : col + 1;
+  } else if (event.key === "ArrowUp" && input.selectionStart === 0 && input.selectionEnd === 0) {
+    event.preventDefault();
+    nextRow = row - 1;
+  } else if (event.key === "ArrowDown" && input.selectionStart === input.value.length && input.selectionEnd === input.value.length) {
+    event.preventDefault();
+    nextRow = row + 1;
   }
 
-  const existingTitles = new Set(editorState.pages.map((page) => page.title.toLocaleLowerCase()));
-  let title = "New page";
-  let suffix = 2;
-  while (existingTitles.has(title.toLocaleLowerCase())) {
-    title = `New page ${suffix}`;
-    suffix += 1;
+  if (nextRow !== row || nextCol !== col) {
+    focusSpreadsheetCell(nextRow, nextCol);
+  }
+}
+
+function focusSpreadsheetCell(row, col) {
+  if (!editorState) return;
+  if (row < 0 || col < 0 || row >= editorState.rows.length || col >= editorState.rows[0].length) return;
+  const cell = $(`#spreadsheetGrid .sheet-cell[data-row="${row}"][data-col="${col}"]`);
+  if (!cell) return;
+  cell.focus();
+  cell.select();
+}
+
+function addSheetRow() {
+  if (!editorState) return;
+  const columnCount = editorState.rows[0]?.length || 1;
+  editorState.rows.push(Array.from({ length: columnCount }, () => ""));
+  renderSpreadsheet(editorState.rows.length - 1, 0);
+  setStatus($("#exportStatus"), "Row added. It will be included when you export.");
+}
+
+function addSheetColumn() {
+  if (!editorState) return;
+  editorState.rows.forEach((row) => row.push(""));
+  renderSpreadsheet(0, editorState.rows[0].length - 1);
+  setStatus($("#exportStatus"), "Column added. It will be included when you export.");
+}
+
+function updateSpreadsheetMeta() {
+  if (!editorState) return;
+  const rows = editorState.rows.length;
+  const cols = editorState.rows[0]?.length || 0;
+  $("#editorMeta").textContent = `${rows} ${rows === 1 ? "row" : "rows"} x ${cols} ${cols === 1 ? "column" : "columns"}`;
+}
+
+function spreadsheetColumnName(index) {
+  let name = "";
+  let value = index + 1;
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    value = Math.floor((value - 1) / 26);
+  }
+  return name;
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  let index = text.startsWith("\uFEFF") ? 1 : 0;
+
+  for (; index < text.length; index++) {
+    const char = text[index];
+    if (quoted) {
+      if (char === "\"") {
+        if (text[index + 1] === "\"") {
+          cell += "\"";
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      if (cell.length === 0) {
+        quoted = true;
+      } else {
+        throw new Error("Invalid CSV: quotes must begin a cell or be escaped.");
+      }
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n" || char === "\r") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      if (char === "\r" && text[index + 1] === "\n") index += 1;
+    } else {
+      cell += char;
+    }
   }
 
-  editorState.pages.push({ title, markdown: "" });
-  editorState.activePageIndex = editorState.pages.length - 1;
-  renderEditorPages();
-  setStatus($("#exportStatus"), "New page added. It will be included when you export.");
-  $("#editorPageTitle").focus();
-  $("#editorPageTitle").select();
-}
-
-function loadActiveEditorPage() {
-  const page = editorState.pages[editorState.activePageIndex];
-  $("#textEditor").value = page.markdown;
-  $("#editorPageTitle").value = page.title;
-  $("#textEditor").setAttribute("aria-label", editorState.paged ? `${page.title} page contents` : "File contents");
-}
-
-function saveActiveEditorPage() {
-  const page = editorState.pages[editorState.activePageIndex];
-  page.markdown = $("#textEditor").value;
-  if (!editorState.paged) return;
-  if (page.markdown.split(/\r?\n/).some((line) => /^\s*={3,}\s*$/.test(line))) {
-    throw new Error("Page content cannot contain a line of three or more equals signs because it is reserved for page markers.");
+  if (quoted) throw new Error("Invalid CSV: quoted cell is not closed.");
+  if (cell.length || row.length || rows.length === 0) {
+    row.push(cell);
+    rows.push(row);
   }
-  const title = $("#editorPageTitle").value.trim();
-  if (!title) throw new Error("Every Markdown page must have a title.");
-  if (/^\s*={3,}\s*$/.test(title)) throw new Error("A page title cannot be an equals-sign marker.");
-  page.title = title;
-  const button = $("#editorPageNavigationLinks").querySelectorAll(".editor-page-tab")[editorState.activePageIndex];
-  if (button) button.textContent = title;
+  return rows;
 }
 
-function syncEditorPageTitle() {
-  if (!editorState?.paged) return;
-  const title = $("#editorPageTitle").value.trim();
-  const button = $("#editorPageNavigationLinks").querySelectorAll(".editor-page-tab")[editorState.activePageIndex];
-  if (button) button.textContent = title || "Untitled page";
+function normalizeCSVRows(rows) {
+  const columnCount = Math.max(1, ...rows.map((row) => row.length));
+  const normalized = rows.map((row) => {
+    const next = row.slice();
+    while (next.length < columnCount) next.push("");
+    return next;
+  });
+  return normalized.length ? normalized : [[""]];
 }
 
-function serializeMarkdownPages(pages) {
-  return pages.map((page) => `===\n${page.title}\n===\n\n${page.markdown.trim()}`).join("\n\n") + "\n";
+function serializeCSV(rows) {
+  return rows.map((row) => row.map(escapeCSVCell).join(",")).join("\n") + "\n";
+}
+
+function escapeCSVCell(value) {
+  const text = String(value);
+  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, "\"\"")}"`;
+  return text;
 }
 
 function renderDownloads(root, assets) {

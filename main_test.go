@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestStaticHandlerServesIndex(t *testing.T) {
@@ -82,14 +86,11 @@ func TestStaticHandlerServesIntroByDefault(t *testing.T) {
 	if !bytes.Contains(body, []byte(`data-tab="encrypt"`)) || !bytes.Contains(body, []byte(`data-tab="decrypt"`)) {
 		t.Fatal("index did not include encrypt and decrypt pages")
 	}
-	if !bytes.Contains(body, []byte(`data-tab="edit"`)) || !bytes.Contains(body, []byte(`id="textEditor"`)) {
-		t.Fatal("index did not include the lock file editor")
+	if !bytes.Contains(body, []byte(`data-tab="edit"`)) || !bytes.Contains(body, []byte(`id="spreadsheetGrid"`)) {
+		t.Fatal("index did not include the CSV spreadsheet editor")
 	}
-	if !bytes.Contains(body, []byte(`id="editorPageNavigation"`)) || !bytes.Contains(body, []byte(`id="editorPageTitle"`)) {
-		t.Fatal("index did not include the paged Markdown editor")
-	}
-	if !bytes.Contains(body, []byte(`data-tab="render"`)) || !bytes.Contains(body, []byte(`id="renderForm"`)) {
-		t.Fatal("index did not include the Markdown lock renderer")
+	if !bytes.Contains(body, []byte(`id="addSheetRow"`)) || !bytes.Contains(body, []byte(`id="addSheetColumn"`)) {
+		t.Fatal("index did not include spreadsheet row and column controls")
 	}
 	if !bytes.Contains(body, []byte(`data-tab="alphabetize"`)) || !bytes.Contains(body, []byte(`id="alphabetizeForm"`)) {
 		t.Fatal("index did not include the Markdown section alphabetizer")
@@ -123,7 +124,7 @@ func TestMarkdownAlphabetizerUsesExistingCredentials(t *testing.T) {
 	}
 }
 
-func TestMarkdownEditorUsesTitledPages(t *testing.T) {
+func TestCSVEditorUsesSpreadsheetWorkflow(t *testing.T) {
 	handler, err := staticHandler()
 	if err != nil {
 		t.Fatal(err)
@@ -134,97 +135,24 @@ func TestMarkdownEditorUsesTitledPages(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()
 	for _, text := range [][]byte{
-		[]byte(`renderEditorPages`),
-		[]byte(`activateEditorPage`),
-		[]byte(`addEditorPage`),
-		[]byte(`saveActiveEditorPage`),
-		[]byte(`serializeMarkdownPages`),
-		[]byte(`reserved for page markers`),
+		[]byte(`requireCSVName`),
+		[]byte(`parseCSV`),
+		[]byte(`normalizeCSVRows`),
+		[]byte(`renderSpreadsheet`),
+		[]byte(`handleSpreadsheetKeydown`),
+		[]byte(`serializeCSV`),
+		[]byte(`Protected by the same PIN and key bundle`),
 	} {
 		if !bytes.Contains(body, text) {
-			t.Fatalf("paged Markdown editor logic did not include %q", text)
+			t.Fatalf("CSV spreadsheet editor logic did not include %q", text)
 		}
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if !bytes.Contains(rec.Body.Bytes(), []byte(`id="addEditorPage"`)) {
-		t.Fatal("paged Markdown editor did not include an add-page control")
-	}
-}
-
-func TestMarkdownRendererIsRestrictedToLockFiles(t *testing.T) {
-	handler, err := staticHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	body := rec.Body.Bytes()
-	for _, text := range [][]byte{
-		[]byte(`accept=".lock"`),
-		[]byte(`Render Markdown Lock File`),
-		[]byte(`id="renderOutput"`),
-	} {
-		if !bytes.Contains(body, text) {
-			t.Fatalf("Markdown renderer UI did not include %q", text)
-		}
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/app.js", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	body = rec.Body.Bytes()
-	for _, text := range [][]byte{
-		[]byte(`requireMarkdownName`),
-		[]byte(`fetch("/api/render"`),
-		[]byte(`html: await response.text()`),
-		[]byte(`buildRenderNavigation`),
-		[]byte(`querySelectorAll("h1")`),
-		[]byte(`makeRenderedListItemsCopyable`),
-		[]byte(`querySelectorAll("li")`),
-		[]byte(`copyTextToClipboard`),
-		[]byte(`parseMarkdownPages`),
-		[]byte(`renderMarkdownPages`),
-		[]byte(`renderPageNavigationLinks`),
-	} {
-		if !bytes.Contains(body, text) {
-			t.Fatalf("Markdown renderer logic did not include %q", text)
-		}
-	}
-}
-
-func TestRenderMarkdown(t *testing.T) {
-	handler, err := staticHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/api/render", bytes.NewBufferString("# Hello\n\n- one\n- two\n"))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
-	}
-	for _, want := range [][]byte{[]byte("<h1>Hello</h1>"), []byte("<li>one</li>")} {
-		if !bytes.Contains(rec.Body.Bytes(), want) {
-			t.Fatalf("rendered HTML did not include %q", want)
-		}
-	}
-}
-
-func TestRenderMarkdownDoesNotRenderRawHTML(t *testing.T) {
-	handler, err := staticHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/api/render", bytes.NewBufferString("<script>alert(1)</script>"))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if bytes.Contains(rec.Body.Bytes(), []byte("<script>")) {
-		t.Fatal("raw HTML was rendered")
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`Unlock spreadsheet`)) {
+		t.Fatal("CSV editor did not include an unlock spreadsheet control")
 	}
 }
 
@@ -239,7 +167,7 @@ func TestUIUsesSingleKeyBundleWorkflow(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()
 	for _, text := range [][]byte{
-		[]byte(`one key bundle`),
+		[]byte(`one portable key bundle`),
 		[]byte(`Key bundle`),
 		[]byte(`Export new lock file`),
 	} {
@@ -273,7 +201,7 @@ func TestLockWorkflowsAcceptLockAndBundleTogether(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()
-	for _, id := range []string{"decryptAsset", "editAsset", "renderAsset", "alphabetizeAsset"} {
+	for _, id := range []string{"decryptAsset", "editAsset", "alphabetizeAsset"} {
 		want := []byte(`id="` + id + `" name="asset" type="file" accept=".lock,.bundle" multiple`)
 		if !bytes.Contains(body, want) {
 			t.Fatalf("combined lock and bundle picker missing for %s", id)
@@ -319,4 +247,126 @@ func TestBrowserURLUsesLocalhostForWildcardListeners(t *testing.T) {
 			t.Errorf("browserURL(%q) = %q, want %q", addr, got, want)
 		}
 	}
+}
+
+func TestInitCreatesConfigAndSQLite(t *testing.T) {
+	withTempWorkingDir(t, func(dir string) {
+		var out bytes.Buffer
+		if err := initApp(&out); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "config/.env")); err != nil {
+			t.Fatalf("config was not created: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "data/main.sqlite")); err != nil {
+			t.Fatalf("sqlite database was not created: %v", err)
+		}
+		if !strings.Contains(out.String(), "initialized config/.env") {
+			t.Fatalf("unexpected init output: %s", out.String())
+		}
+	})
+}
+
+func TestAdminRoutesRequireSession(t *testing.T) {
+	server := newTestAppServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/login" {
+		t.Fatalf("redirect = %q, want /login", got)
+	}
+}
+
+func TestLoginFailuresBanIPAfterFiveAttempts(t *testing.T) {
+	server := newTestAppServer(t)
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=wrong"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = "203.0.113.7:12345"
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+
+		if attempt < 5 && rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d status %d", attempt, rec.Code)
+		}
+		if attempt == 5 && rec.Code != http.StatusForbidden {
+			t.Fatalf("attempt %d status %d, want 403", attempt, rec.Code)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "203.0.113.7:12345"
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("banned correct login status %d, want 403", rec.Code)
+	}
+}
+
+func TestServerLockAndBundleRoundTrip(t *testing.T) {
+	locked, bundle, err := encryptWithPIN([]byte("a,b\n1,2\n"), "sample.csv", "1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, name, err := unlockPair(bundle, locked, "1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "sample.csv" {
+		t.Fatalf("name = %q", name)
+	}
+	if string(plain) != "a,b\n1,2\n" {
+		t.Fatalf("plain = %q", string(plain))
+	}
+	if _, _, err := unlockPair(bundle, locked, "9999"); err == nil {
+		t.Fatal("wrong PIN decrypted successfully")
+	}
+}
+
+func newTestAppServer(t *testing.T) *appServer {
+	t.Helper()
+	db, err := openDB(filepath.Join(t.TempDir(), "main.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	public, err := staticHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &appServer{
+		db: db,
+		cfg: config{
+			AdminUsername: "admin",
+			AdminPassword: "secret",
+			SessionSecret: []byte("test-secret"),
+		},
+		public: public,
+		now:    func() time.Time { return time.Unix(1800000000, 0) },
+	}
+}
+
+func withTempWorkingDir(t *testing.T, fn func(string)) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(old); err != nil {
+			t.Fatal(err)
+		}
+	})
+	fn(dir)
 }
