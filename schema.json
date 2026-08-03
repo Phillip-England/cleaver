@@ -1,3 +1,28 @@
 {
-  "variables": []
+  "variables": [
+    {
+      "name": "ADMIN_USERNAME",
+      "description": "Username used to sign in to the Cleaver admin portal.",
+      "example": "admin",
+      "required": true
+    },
+    {
+      "name": "ADMIN_PASSWORD",
+      "description": "Password used to sign in to the Cleaver admin portal.",
+      "example": "replace-with-a-strong-password",
+      "required": true
+    },
+    {
+      "name": "SESSION_SECRET",
+      "description": "Secret value used to sign admin session cookies; use a long, randomly generated value.",
+      "example": "replace-with-a-random-32-byte-secret",
+      "required": true
+    },
+    {
+      "name": "DB_PATH",
+      "description": "SQLite database path, resolved relative to config/.env when not absolute; defaults to ../data/main.sqlite.",
+      "example": "../data/main.sqlite",
+      "required": false
+    }
+  ]
 }
