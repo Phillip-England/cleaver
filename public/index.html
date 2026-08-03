@@ -7,44 +7,44 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="app-header">
+  <header class="site-header">
     <div class="app-shell header-inner">
-      <div>
-        <h1>Cleaver</h1>
-        <div class="hint">Portable file encryption for private handoffs</div>
-      </div>
-      <div class="header-actions">
-        <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme">Dark</button>
-        <div class="security-pill" aria-label="Application packaging">Self-contained binary</div>
-      </div>
+      <button class="brand tab active" data-tab="intro" type="button" aria-label="Cleaver home">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>Cleaver</span>
+      </button>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <button class="tab" data-tab="encrypt" type="button">Encrypt</button>
+        <button class="tab" data-tab="decrypt" type="button">Decrypt</button>
+        <button class="tab" data-tab="edit" type="button">Edit</button>
+        <button class="tab" data-tab="render" type="button">Render</button>
+        <button class="tab" data-tab="alphabetize" type="button">Alphabetize</button>
+        <button class="tab" data-tab="markdown-docs" type="button">Guide</button>
+      </nav>
+      <button class="nav-cta" data-tab-target="encrypt" type="button">Secure a file</button>
     </div>
   </header>
 
-  <main class="app-shell">
-    <nav class="tabs" aria-label="Pages">
-      <button class="tab active" data-tab="intro" type="button">Intro</button>
-      <button class="tab" data-tab="encrypt" type="button">Encrypt</button>
-      <button class="tab" data-tab="decrypt" type="button">Decrypt</button>
-    </nav>
+  <main class="app-shell site-main">
 
     <section id="intro" class="screen active">
       <div class="intro-layout">
         <div class="intro-copy">
-          <p class="eyebrow">What Cleaver Does</p>
-          <h2>Encrypt a file into a lock file, then unlock it later with the PIN and shard files.</h2>
+          <p class="eyebrow"><span class="sr-only">What Cleaver Does · </span>Private by design · Simple by default</p>
+          <h2>Send sensitive files with confidence.</h2>
           <p>
-            Cleaver runs as a tiny web app served by one Go binary. The file work happens in your browser with
-            Web Crypto: the app reads your selected file, creates encrypted output, and offers downloads for the
-            lock file, shard files, and recovery note.
+            Cleaver encrypts files locally in your browser. Nothing is uploaded. You get a secure lock file and
+            one portable key bundle—everything you need for a private handoff, without an account or cloud storage.
           </p>
           <div class="intro-actions">
-            <button class="primary" data-tab-target="encrypt" type="button">Start encrypting</button>
-            <button class="secondary" data-tab-target="decrypt" type="button">Decrypt a lock file</button>
+            <button class="primary" data-tab-target="encrypt" type="button">Encrypt a file</button>
+            <button class="secondary" data-tab-target="decrypt" type="button">Open a lock file</button>
           </div>
         </div>
 
-        <div class="doc-panel" aria-label="How Cleaver works">
-          <h3>How It Works</h3>
+        <div class="doc-panel process-panel" aria-label="How Cleaver works">
+          <p class="panel-kicker">The process</p>
+          <h3>From file to secure handoff.</h3>
           <ol class="steps">
             <li>
               <strong>Choose a file.</strong>
@@ -52,15 +52,15 @@
             </li>
             <li>
               <strong>Enter a numeric PIN.</strong>
-              The PIN selects and combines random shard files to derive the AES key.
+              The PIN selects and combines random key records inside the bundle to derive the AES key.
             </li>
             <li>
               <strong>Download every output.</strong>
-              Keep the <code>.lock</code> file, digit shard files, and recovery note.
+              Keep the <code>.lock</code> file and its <code>.bundle</code> file.
             </li>
             <li>
               <strong>Decrypt later.</strong>
-              Provide the lock file, the same PIN, and the shard files to recover the original file.
+              Provide the lock file, the same PIN, and its key bundle to recover the original file.
             </li>
           </ol>
         </div>
@@ -69,11 +69,11 @@
       <div class="docs-grid" aria-label="Operational notes">
         <section class="doc-panel">
           <h3>What To Keep</h3>
-          <p>Store the encrypted <code>.lock</code> file separately from the shard files. Anyone decrypting needs the lock file, the PIN, and all ten shard files.</p>
+          <p>Store the encrypted <code>.lock</code> file separately from its key bundle. Anyone decrypting needs the lock file, the PIN, and that one bundle.</p>
         </section>
         <section class="doc-panel">
           <h3>What Cleaver Cannot Do</h3>
-          <p>Cleaver cannot recover a lost PIN, missing shard, corrupted lock file, or overwritten download. Treat the generated files as the only recovery material.</p>
+          <p>Cleaver cannot recover a lost PIN, missing key bundle, corrupted lock file, or overwritten download. Treat the generated files as the only recovery material.</p>
         </section>
         <section class="doc-panel">
           <h3>Deployment Shape</h3>
@@ -100,7 +100,7 @@
           </div>
 
           <input type="hidden" name="mode" value="pin">
-          <div class="credential-card">Random key material is generated automatically. Your PIN and shard files are required to decrypt.</div>
+          <div class="credential-card">Random key material is generated automatically and packed into one bundle. Your PIN and bundle are required to decrypt.</div>
 
           <div class="field">
             <label for="encryptPin">PIN</label>
@@ -114,9 +114,9 @@
         <div class="panel output-panel">
           <h3>Downloads</h3>
           <div class="downloads" id="encryptDownloads">
-            <div class="empty">Select a file and encrypt it. Your lock file and shards will appear here.</div>
+            <div class="empty">Select a file and encrypt it. Your lock file and key bundle will appear here.</div>
           </div>
-          <div class="warning">Cleaver cannot recover a lost PIN or missing shard files.</div>
+          <div class="warning">Cleaver cannot recover a lost PIN or missing key bundle.</div>
         </div>
       </div>
     </section>
@@ -124,17 +124,17 @@
     <section id="decrypt" class="screen">
       <div class="page-head">
         <h2>Decrypt File</h2>
-        <p>Select a Cleaver lock file, then provide the PIN and shard files created during encryption.</p>
+        <p>Select a Cleaver lock file and its key bundle together, then provide the PIN created during encryption.</p>
       </div>
       <div class="two-column">
         <form class="panel form-panel" id="decryptForm">
           <div class="field">
-            <label for="decryptAsset">Lock file</label>
+            <label for="decryptAsset">Lock file and key bundle</label>
             <label class="dropzone" for="decryptAsset" id="decryptDropzone">
-              <span>Drop a lock file here</span>
-              <small>or choose a file</small>
+              <span>Drop a lock file and bundle here</span>
+              <small>or choose both files together</small>
             </label>
-            <input class="file-input" id="decryptAsset" name="asset" type="file" required>
+            <input class="file-input" id="decryptAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
             <div class="file-meta" id="decryptFileMeta">No lock file selected.</div>
           </div>
 
@@ -145,7 +145,7 @@
             <input class="input" id="decryptPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
           </div>
           <div class="field">
-            <label for="decryptShards">Shard files</label>
+            <label for="decryptShards">Key bundle (if not selected above)</label>
             <input class="input" id="decryptShards" name="shards" type="file" multiple>
           </div>
 
@@ -164,7 +164,201 @@
         </div>
       </div>
     </section>
+
+    <section id="edit" class="screen">
+      <div class="page-head">
+        <h2>Edit Lock File</h2>
+        <p>Unlock a text file in your browser. Paged Markdown files can be edited one page at a time, then exported with the same PIN and key bundle.</p>
+      </div>
+
+      <form class="panel edit-unlock" id="editForm">
+        <div class="edit-credential-grid">
+          <div class="field">
+            <label for="editAsset">Lock file and key bundle</label>
+            <label class="dropzone compact-dropzone" for="editAsset" id="editDropzone">
+              <span>Drop a lock file and bundle here</span>
+              <small>or choose both files together</small>
+            </label>
+            <input class="file-input" id="editAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
+            <div class="file-meta" id="editFileMeta">No lock file selected.</div>
+          </div>
+          <div class="field">
+            <label for="editPin">PIN</label>
+            <input class="input" id="editPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+            <label for="editShards">Key bundle (if not selected above)</label>
+            <input class="input" id="editShards" name="shards" type="file" multiple>
+            <button class="primary" id="editUnlockSubmit" type="submit" disabled>Unlock and edit</button>
+          </div>
+        </div>
+        <div class="status" id="editStatus" role="status"></div>
+      </form>
+
+      <div class="text-workspace" id="textWorkspace" hidden>
+        <div class="editor-toolbar">
+          <div>
+            <h3 id="editorTitle">Text editor</h3>
+            <div class="hint" id="editorMeta">Changes stay in this browser until export</div>
+          </div>
+          <div class="actions">
+            <button class="secondary" id="closeEditor" type="button">Close</button>
+            <button class="primary" id="exportLock" type="button">Export new lock file</button>
+          </div>
+        </div>
+        <nav class="editor-page-navigation" id="editorPageNavigation" aria-label="Markdown pages" hidden>
+          <div class="editor-page-navigation-head">
+            <strong>Edit page</strong>
+            <button class="secondary" id="addEditorPage" type="button">Add page</button>
+          </div>
+          <div class="editor-page-navigation-links" id="editorPageNavigationLinks" role="tablist"></div>
+        </nav>
+        <div class="editor-page-title" id="editorPageTitleField" hidden>
+          <label for="editorPageTitle">Page title</label>
+          <input class="input" id="editorPageTitle" type="text" autocomplete="off">
+        </div>
+        <textarea id="textEditor" class="text-editor" spellcheck="false" aria-label="File contents"></textarea>
+        <div class="status" id="exportStatus" role="status"></div>
+        <div class="downloads" id="editDownloads"></div>
+      </div>
+    </section>
+
+    <section id="render" class="screen">
+      <div class="page-head">
+        <h2>Render Markdown Lock File</h2>
+        <p>Unlock a Markdown file stored in a Cleaver lock, then render it as a document with Goldmark.</p>
+      </div>
+      <div class="two-column">
+        <form class="panel form-panel" id="renderForm">
+          <div class="field">
+            <label for="renderAsset">Markdown lock file and key bundle</label>
+            <label class="dropzone" for="renderAsset" id="renderDropzone">
+              <span>Drop a Markdown lock file and bundle here</span>
+              <small>or choose both files together</small>
+            </label>
+            <input class="file-input" id="renderAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
+            <div class="file-meta" id="renderFileMeta">No lock file selected.</div>
+          </div>
+          <div class="credential-card" id="renderCredentialSummary">Only lock files whose original file is Markdown can be rendered.</div>
+          <div class="field">
+            <label for="renderPin">PIN</label>
+            <input class="input" id="renderPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="renderShards">Key bundle (if not selected above)</label>
+            <input class="input" id="renderShards" name="shards" type="file" multiple>
+          </div>
+          <button class="primary full" id="renderSubmit" type="submit" disabled>Unlock and render</button>
+          <div class="status" id="renderStatus" role="status"></div>
+        </form>
+        <div class="panel output-panel render-output-panel">
+          <h3 id="renderTitle">Rendered document</h3>
+          <div class="render-document-layout">
+            <aside class="render-document-sidebar" id="renderDocumentSidebar" hidden>
+              <nav class="render-page-navigation" id="renderPageNavigation" aria-label="Document pages">
+                <strong>Pages</strong>
+                <div class="render-page-navigation-links" id="renderPageNavigationLinks" role="tablist"></div>
+              </nav>
+              <div id="renderSectionNavigations"></div>
+            </aside>
+            <article class="markdown-body" id="renderOutput">
+              <div class="empty">The rendered Markdown document will appear here.</div>
+            </article>
+          </div>
+          <div class="warning">
+            Rendering sends the unlocked Markdown to this Cleaver server. It is processed in memory and is not stored.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="markdown-docs" class="screen">
+      <div class="page-head">
+        <h2>Markdown Document Format</h2>
+        <p>Format Markdown lock files as titled pages containing copyable dashed list items.</p>
+      </div>
+      <div class="panel markdown-format-docs">
+        <h3>Page markers</h3>
+        <p>Every page, including the first, begins with a line of at least three equals signs, a title on its own line, and another equals-sign line.</p>
+        <pre><code>===
+FIRST PAGE
+===
+
+# Header
+
+- First copyable item
+- Second copyable item
+
+==========
+SECOND PAGE
+==========
+
+# Another Header
+
+- Another copyable item</code></pre>
+        <p>The opening and closing marker lengths do not need to match. A line containing three or more equals signs is reserved for page markers and should not appear in page content.</p>
+
+        <h3>Headings and copyable items</h3>
+        <p>Use <code># </code> for section headings. Put every value that should be independently copyable on a separate <code>- </code> list line. The spaces after <code>#</code> and <code>-</code> are required.</p>
+        <pre><code># Account Details
+
+- Plain text
+- **Important text**
+- [A link](https://example.com)
+- Run `example-command --option`</code></pre>
+
+        <h3>Rendered navigation</h3>
+        <p>Page titles become page tabs. Each page also gets its own navigation for its <code>#</code> headings, and every rendered list item gets a Copy button.</p>
+
+        <h3>Editing and alphabetizing</h3>
+        <p>The editor presents one tab per page and allows its title and Markdown body to be edited independently. Alphabetizing sorts <code>#</code> sections within each page without mixing sections between pages.</p>
+      </div>
+    </section>
+
+    <section id="alphabetize" class="screen">
+      <div class="page-head">
+        <h2>Alphabetize Markdown Sections</h2>
+        <p>Unlock a paged Markdown lock file, sort the <code>#</code> heading sections within each page, and export a new lock file using the same PIN and key bundle.</p>
+      </div>
+      <div class="two-column">
+        <form class="panel form-panel" id="alphabetizeForm">
+          <div class="field">
+            <label for="alphabetizeAsset">Markdown lock file and key bundle</label>
+            <label class="dropzone" for="alphabetizeAsset" id="alphabetizeDropzone">
+              <span>Drop a Markdown lock file and bundle here</span>
+              <small>or choose both files together</small>
+            </label>
+            <input class="file-input" id="alphabetizeAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
+            <div class="file-meta" id="alphabetizeFileMeta">No lock file selected.</div>
+          </div>
+          <div class="credential-card" id="alphabetizeCredentialSummary">The Markdown must use titled page markers with sections beginning with single <code>#</code> headings.</div>
+          <div class="field">
+            <label for="alphabetizePin">PIN</label>
+            <input class="input" id="alphabetizePin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="alphabetizeShards">Key bundle (if not selected above)</label>
+            <input class="input" id="alphabetizeShards" name="shards" type="file" multiple>
+          </div>
+          <button class="primary full" id="alphabetizeSubmit" type="submit" disabled>Alphabetize and export lock</button>
+          <div class="status" id="alphabetizeStatus" role="status"></div>
+        </form>
+        <div class="panel output-panel">
+          <h3>Alphabetized lock file</h3>
+          <div class="downloads" id="alphabetizeDownloads">
+            <div class="empty">The alphabetized Markdown will remain encrypted and appear here as a new lock file.</div>
+          </div>
+          <div class="warning">Section content stays attached to its heading. The original lock file is not changed.</div>
+        </div>
+      </div>
+    </section>
+
   </main>
+
+  <footer class="site-footer">
+    <div class="app-shell footer-inner">
+      <div><strong>Cleaver</strong><span>Private file encryption, in your browser.</span></div>
+      <button data-tab-target="markdown-docs" type="button">Markdown guide</button>
+    </div>
+  </footer>
 
   <script src="/app.js" defer></script>
 </body>
