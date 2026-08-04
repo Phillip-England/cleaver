@@ -1,7 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 
-let artifacts = [];
-let locks = [];
+let keys = [];
 let editorState = null;
 
 document.querySelectorAll("[data-admin-tab]").forEach((button) => {
@@ -9,7 +8,6 @@ document.querySelectorAll("[data-admin-tab]").forEach((button) => {
 });
 
 $("#adminEncryptForm").addEventListener("submit", encryptArtifact);
-$("#bundleQRForm").addEventListener("submit", createBundleQR);
 $("#unlockForm").addEventListener("submit", unlockForEdit);
 $("#decryptDownload").addEventListener("click", decryptDownload);
 $("#adminRelock").addEventListener("click", relockCSV);
@@ -22,7 +20,7 @@ function activateAdminTab(name) {
   document.querySelectorAll("[data-admin-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminTab === name);
   });
-  ["registry", "encrypt", "bundle", "unlock"].forEach((id) => {
+  ["registry", "encrypt", "unlock"].forEach((id) => {
     $(`#admin-${id}`).classList.toggle("active", id === name);
   });
 }
@@ -35,7 +33,7 @@ async function encryptArtifact(event) {
   try {
     const result = await postForm("/api/admin/encrypt", form);
     form.reset();
-    setStatus(status, "Lock created. Download the bundle before leaving this page.");
+    setStatus(status, "Key saved. Download your lock file now.");
     renderCreatedLock(result);
     await refreshArtifacts();
   } catch (error) {
@@ -46,27 +44,11 @@ async function encryptArtifact(event) {
 function renderCreatedLock(result) {
   const root = $("#lockCreated");
   root.hidden = false;
-  root.innerHTML = `<h3>Lock ready</h3><img class="lock-qr" alt="QR code for lock link"><div class="field"><label>Access link</label><input class="input" readonly></div><div class="actions"><a class="secondary" target="_blank" rel="noopener">Open link</a><a class="secondary" download="lock-qr.png">Download lock QR</a><a class="primary">Download bundle</a></div>`;
-  root.querySelector("img").src = result.qr_url;
-  root.querySelector("input").value = result.url;
+  root.innerHTML = `<h3>Lock ready</h3><p>The key is saved in this portal. Keep the downloaded lock file wherever you choose.</p><div class="actions"><a class="primary">Download lock file</a><a class="secondary">Open public key link</a></div>`;
   const links = root.querySelectorAll("a");
-  links[0].href = result.url; links[1].href = result.qr_url; links[2].href = `/api/admin/artifacts/${result.bundle_id}/download`;
-}
-
-async function createBundleQR(event) {
-  event.preventDefault();
-  const status = $("#bundleQRStatus");
-  setStatus(status, "Creating QR code...");
-  try {
-    const response = await fetch("/api/admin/bundle-qr", { method: "POST", body: new FormData(event.currentTarget) });
-    if (!response.ok) throw new Error(await response.text());
-    const url = URL.createObjectURL(await response.blob());
-    const result = $("#bundleQRResult");
-    const old = $("#bundleQRImage").src;
-    if (old.startsWith("blob:")) URL.revokeObjectURL(old);
-    $("#bundleQRImage").src = url; $("#bundleQRDownload").href = url; result.hidden = false;
-    setStatus(status, "Bundle QR is ready.");
-  } catch (error) { setStatus(status, error.message, true); }
+  links[0].href = downloadBase64(result.lock_data, result.lock_name);
+  links[0].download = result.lock_name;
+  links[1].href = result.public_url;
 }
 
 async function unlockForEdit(event) {
@@ -78,7 +60,8 @@ async function unlockForEdit(event) {
     const text = decodeBase64Text(result.data);
     if (!/\.csv$/i.test(result.name)) throw new Error("The unlocked asset is not a CSV file.");
     editorState = {
-      assetIds: selectedAssetIds(),
+      keyId: Number($("#keySelect").value),
+      lockData: await fileBase64($("#lockFile").files[0]),
       pin: $("#unlockPin").value,
       name: result.name,
       rows: normalizeCSVRows(parseCSV(text)),
@@ -113,101 +96,72 @@ async function decryptDownload() {
 async function relockCSV() {
   if (!editorState) return;
   const status = $("#relockStatus");
-  setStatus(status, "Relocking into the registry...");
+  setStatus(status, "Creating your new lock...");
   try {
-    await postJSON("/api/admin/relock", {
-      asset_ids: editorState.assetIds,
+    const result = await postJSON("/api/admin/relock", {
+      key_id: editorState.keyId,
+      lock_data: editorState.lockData,
       pin: editorState.pin,
       csv: serializeCSV(editorState.rows),
     });
-    setStatus(status, "Registry lock updated.");
-    await refreshArtifacts();
+    const link = document.createElement("a");
+    link.href = downloadBase64(result.lock_data, result.name);
+    link.download = result.name;
+    link.click();
+    setStatus(status, "New lock downloaded. The uploaded lock was not stored or changed.");
   } catch (error) {
     setStatus(status, error.message, true);
   }
 }
 
 async function unlockSelected() {
-  const assetIds = selectedAssetIds();
-  if (assetIds[0] === assetIds[1]) throw new Error("Choose two different artifacts.");
+  const lock = $("#lockFile").files[0];
+  if (!lock) throw new Error("Choose a lock file.");
   const pin = $("#unlockPin").value;
   if (!pin) throw new Error("PIN is required.");
-  return postJSON("/api/admin/decrypt", { asset_ids: assetIds, pin });
-}
-
-function selectedAssetIds() {
-  return [Number($("#assetA").value), Number($("#assetB").value)];
+  const form = new FormData();
+  form.append("key_id", $("#keySelect").value);
+  form.append("pin", pin);
+  form.append("lock", lock);
+  const response = await fetch("/api/admin/open", { method: "POST", body: form });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
 }
 
 async function refreshArtifacts() {
-  const data = await getJSON("/api/admin/artifacts");
-  artifacts = data.artifacts || [];
-  locks = data.locks || [];
-  renderLockList();
-  renderArtifactList();
-  renderArtifactSelects();
+  const data = await getJSON("/api/admin/keys");
+  keys = data.keys || [];
+  renderKeyList();
+  renderKeySelect();
 }
 
-function renderLockList() {
-  const root = $("#lockList");
+function renderKeyList() {
+  const root = $("#keyList");
   root.replaceChildren();
-  if (!locks.length) { root.innerHTML = `<div class="panel empty">No locks yet. Create one from a CSV.</div>`; return; }
-  for (const item of locks) {
-    const url = `${location.origin}/l/${item.token}`;
+  if (!keys.length) { root.innerHTML = `<div class="panel empty">No keys yet. Upload a CSV to create your first lock and key.</div>`; return; }
+  for (const item of keys) {
     const row = document.createElement("div"); row.className = "artifact-row";
-    row.innerHTML = `<div><strong></strong><small></small></div><div class="actions"><button class="secondary" type="button">Copy link</button><a class="secondary" target="_blank" rel="noopener">Open</a><a class="secondary" download="lock-qr.png">QR code</a></div>`;
+    row.innerHTML = `<div><strong></strong><small></small></div><div class="actions"><a class="secondary">Open public link</a><button class="secondary copy-link" type="button">Copy link</button><button class="secondary delete-key" type="button">Delete</button></div>`;
     row.querySelector("strong").textContent = item.name; row.querySelector("small").textContent = item.filename;
-    const [copy, open, qr] = row.querySelectorAll("button,a");
-    copy.addEventListener("click", async () => { await navigator.clipboard.writeText(url); copy.textContent = "Copied"; });
-    open.href = url; qr.href = `/api/locks/${item.token}/qr.png`; root.append(row);
-  }
-}
-
-function renderArtifactList() {
-  const root = $("#artifactList");
-  if (!root) return;
-  root.innerHTML = "";
-  if (!artifacts.length) {
-    root.innerHTML = `<div class="panel empty">No artifacts stored.</div>`;
-    return;
-  }
-  for (const item of artifacts) {
-    const row = document.createElement("div");
-    row.className = "artifact-row";
-    row.innerHTML = `
-      <div>
-        <strong></strong>
-        <small></small>
-      </div>
-      <div class="actions">
-        <a class="secondary" href="/api/admin/artifacts/${item.id}/download">Download</a>
-        <button class="secondary" type="button">Delete</button>
-      </div>`;
-    row.querySelector("strong").textContent = item.name;
-    row.querySelector("small").textContent = `${item.filename} · ${formatBytes(item.size)}`;
-    row.querySelector("button").addEventListener("click", async () => {
-      await fetch(`/api/admin/artifacts/${item.id}`, { method: "DELETE" });
-      await refreshArtifacts();
-    });
+    const publicURL = `${location.origin}/key/${item.token}`;
+    row.querySelector("a").href = publicURL;
+    row.querySelector(".copy-link").addEventListener("click", async (event) => { await navigator.clipboard.writeText(publicURL); event.currentTarget.textContent = "Copied"; });
+    row.querySelector(".delete-key").addEventListener("click", async () => { await fetch(`/api/admin/keys/${item.id}`, { method: "DELETE" }); await refreshArtifacts(); });
     root.append(row);
   }
 }
 
-function renderArtifactSelects() {
-  for (const select of [$("#assetA"), $("#assetB")]) {
-    const current = select.value;
-    select.innerHTML = "";
-    artifacts.forEach((item) => {
+function renderKeySelect() {
+  const select = $("#keySelect");
+  const current = select.value;
+  select.innerHTML = "";
+  keys.forEach((item) => {
       const option = document.createElement("option");
       option.value = item.id;
       option.textContent = item.name;
       select.append(option);
-    });
-    if ([...select.options].some((option) => option.value === current)) select.value = current;
-  }
-  if (artifacts.length > 1 && $("#assetA").value === $("#assetB").value) {
-    $("#assetB").selectedIndex = 1;
-  }
+  });
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
 }
 
 function renderGrid(focusRow = 0, focusCol = 0) {
@@ -361,6 +315,19 @@ function base64Bytes(value) {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+function downloadBase64(value) {
+  return URL.createObjectURL(new Blob([base64Bytes(value)], { type: "application/octet-stream" }));
+}
+
+async function fileBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }
 
 function setStatus(el, text, error = false) {

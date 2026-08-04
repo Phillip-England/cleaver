@@ -1,3 +1,17 @@
 # uppr: never commit local configuration or application data
 /config/
 /data/
+
+# Never commit secrets, databases, uploads, or generated Cleaver files.
+*.lock
+*.key
+*.bundle
+*.csv
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+# uppr: never commit local configuration or application data
+/config/
+/data/

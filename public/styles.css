@@ -138,10 +138,8 @@ label { color: var(--ink); font-size: 13px; font-weight: 700; }
 .artifact-row small { color: var(--muted); }
 .artifact-row .actions { padding-right: 0; }
 .artifact-row .secondary { min-height: 38px; padding: 7px 12px; }
-.lock-created, .qr-result { display: grid; justify-items: start; gap: 18px; margin-top: 24px; }
-.lock-created[hidden], .qr-result[hidden] { display: none; }
-.lock-qr, .qr-result img { width: min(100%, 320px); background: white; border-radius: var(--radius-md); }
-.qr-result img { width: min(100%, 420px); }
+.lock-created { display: grid; justify-items: start; gap: 18px; margin-top: 24px; }
+.lock-created[hidden] { display: none; }
 
 .access-page { min-height: 100vh; background: radial-gradient(circle at 50% 25%, #171b18 0, var(--bg) 48%); }
 .access-main { display: grid; align-content: center; justify-items: center; gap: 28px; min-height: 100vh; padding-block: 32px; }
@@ -154,7 +152,6 @@ label { color: var(--ink); font-size: 13px; font-weight: 700; }
 .scan-button:hover { background: rgba(214,255,63,.14); }
 .scan-button .scan-icon { color: var(--accent); font-size: 64px; line-height: 1; }
 .scan-button strong { font-size: 20px; }.scan-button small { color: var(--muted); }
-.camera-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .manual-access { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 18px; text-align: left; color: var(--muted); }
 .manual-access summary { cursor: pointer; text-align: center; }
 .manual-access[open] { display: grid; gap: 16px; }

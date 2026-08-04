@@ -300,43 +300,6 @@ func TestServerLockAndBundleRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPublicLockPageAndQR(t *testing.T) {
-	server := newTestAppServer(t)
-	locked, bundle, err := encryptWithPIN([]byte("site,password\nexample.test,secret\n"), "passwords.csv", "2468")
-	if err != nil {
-		t.Fatal(err)
-	}
-	lockID, err := server.insertArtifact("Passwords lock", "passwords.lock", "application/octet-stream", locked)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundleID, err := server.insertArtifact("Passwords bundle", "passwords.bundle", "application/octet-stream", bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.db.Exec(`INSERT INTO registry_locks (name, token, lock_artifact_id, bundle_artifact_id, created_at) VALUES (?, ?, ?, ?, ?)`, "Passwords", "public-token", lockID, bundleID, server.now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-
-	page := httptest.NewRecorder()
-	server.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/l/public-token", nil))
-	if page.Code != http.StatusOK || !bytes.Contains(page.Body.Bytes(), []byte(`id="qrCamera" type="file" accept="image/*" capture="environment"`)) {
-		t.Fatalf("public page status %d", page.Code)
-	}
-
-	data := httptest.NewRecorder()
-	server.ServeHTTP(data, httptest.NewRequest(http.MethodGet, "/api/locks/public-token", nil))
-	if data.Code != http.StatusOK || !bytes.Contains(data.Body.Bytes(), []byte(`"filename":"passwords.lock"`)) {
-		t.Fatalf("lock data status %d: %s", data.Code, data.Body.String())
-	}
-
-	qr := httptest.NewRecorder()
-	server.ServeHTTP(qr, httptest.NewRequest(http.MethodGet, "/api/locks/public-token/qr.png", nil))
-	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Body.Len() < 100 {
-		t.Fatalf("QR response invalid: %d", qr.Code)
-	}
-}
-
 func newTestAppServer(t *testing.T) *appServer {
 	t.Helper()
 	db, err := openDB(filepath.Join(t.TempDir(), "main.sqlite"))

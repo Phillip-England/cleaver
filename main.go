@@ -19,7 +19,6 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -28,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	qrcode "github.com/skip2/go-qrcode"
 	_ "modernc.org/sqlite"
 )
 
@@ -65,20 +63,11 @@ type appServer struct {
 	now    func() time.Time
 }
 
-type artifact struct {
+type registryKey struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
 	Filename  string `json:"filename"`
-	Size      int64  `json:"size"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
-}
-
-type registryLock struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
 	Token     string `json:"token"`
-	Filename  string `json:"filename"`
 	CreatedAt int64  `json:"created_at"`
 }
 
@@ -232,6 +221,64 @@ func openDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	var tokenColumn int
+	rows, err := db.Query(`PRAGMA table_info(registry_keys)`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			db.Close()
+			return nil, err
+		}
+		if name == "token" {
+			tokenColumn = 1
+		}
+	}
+	rows.Close()
+	if tokenColumn == 0 {
+		if _, err := db.Exec(`ALTER TABLE registry_keys ADD COLUMN token TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, err
+		}
+		keyRows, err := db.Query(`SELECT id FROM registry_keys`)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		var ids []int64
+		for keyRows.Next() {
+			var id int64
+			if err := keyRows.Scan(&id); err != nil {
+				keyRows.Close()
+				db.Close()
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		keyRows.Close()
+		for _, id := range ids {
+			if _, err := db.Exec(`UPDATE registry_keys SET token = ? WHERE id = ?`, randomToken(24), id); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_keys_token ON registry_keys(token)`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// Legacy releases persisted uploaded locks in these tables. Remove them on
+	// every startup so the database can contain key material only.
+	if _, err := db.Exec(`DROP TABLE IF EXISTS registry_locks; DROP TABLE IF EXISTS artifacts;`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -252,24 +299,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS artifacts (
+CREATE TABLE IF NOT EXISTS registry_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   filename TEXT NOT NULL,
-  content_type TEXT NOT NULL,
   data BLOB NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS registry_locks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
   token TEXT NOT NULL UNIQUE,
-  lock_artifact_id INTEGER NOT NULL,
-  bundle_artifact_id INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY(lock_artifact_id) REFERENCES artifacts(id),
-  FOREIGN KEY(bundle_artifact_id) REFERENCES artifacts(id)
+  created_at INTEGER NOT NULL
 );
 `
 
@@ -320,6 +356,10 @@ func (s *appServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLogin(w, r)
 	case r.URL.Path == "/logout":
 		s.handleLogout(w, r)
+	case strings.HasPrefix(r.URL.Path, "/key/"):
+		s.handlePublicKey(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/key/"):
+		s.handlePublicKeyAPI(w, r)
 	case r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/"):
 		if !s.requireSession(w, r) {
 			return
@@ -330,10 +370,6 @@ func (s *appServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleAdminAPI(w, r)
-	case strings.HasPrefix(r.URL.Path, "/api/locks/"):
-		s.publicLockData(w, r)
-	case strings.HasPrefix(r.URL.Path, "/l/"):
-		s.handlePublicLock(w, r)
 	default:
 		s.public.ServeHTTP(w, r)
 	}
@@ -404,110 +440,189 @@ func (s *appServer) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	adminTemplate.Execute(w, nil)
 }
 
+func (s *appServer) publicKeyData(token string) (registryKey, []byte, error) {
+	var key registryKey
+	var data []byte
+	err := s.db.QueryRow(`SELECT id, name, filename, token, created_at, data FROM registry_keys WHERE token = ?`, token).
+		Scan(&key.ID, &key.Name, &key.Filename, &key.Token, &key.CreatedAt, &data)
+	return key, data, err
+}
+
+func (s *appServer) handlePublicKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/key/"), "/")
+	key, _, err := s.publicKeyData(token)
+	if err != nil {
+		http.Error(w, "key not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	publicKeyTemplate.Execute(w, key)
+}
+
+func (s *appServer) handlePublicKeyAPI(w http.ResponseWriter, r *http.Request) {
+	allowed, err := s.checkFailureLimit("unlock_failures", clientIP(r))
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		http.Error(w, "too many unlock attempts", http.StatusForbidden)
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/key/"), "/")
+	token, action, ok := strings.Cut(path, "/")
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	key, keyData, err := s.publicKeyData(token)
+	if err != nil {
+		http.Error(w, "key not found", http.StatusNotFound)
+		return
+	}
+	if action == "open" && r.Method == http.MethodPost {
+		s.openPublicLock(w, r, keyData)
+		return
+	}
+	if action == "relock" && r.Method == http.MethodPost {
+		var req struct {
+			PIN      string `json:"pin"`
+			LockData string `json:"lock_data"`
+			CSV      string `json:"csv"`
+		}
+		if !readJSON(w, r, &req) {
+			return
+		}
+		lockData, err := base64.StdEncoding.DecodeString(req.LockData)
+		if err != nil {
+			http.Error(w, "invalid lock", http.StatusBadRequest)
+			return
+		}
+		_, name, err := unlockPair(lockData, keyData, req.PIN)
+		if err != nil {
+			s.recordFailure("unlock_failures", clientIP(r))
+			http.Error(w, "unlock failed", http.StatusUnauthorized)
+			return
+		}
+		updated, err := relockWithLockAndBundle([]byte(req.CSV), name, req.PIN, lockData, keyData)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{"name": outputName(name, ".lock"), "lock_data": base64.StdEncoding.EncodeToString(updated), "key": key.Name})
+		return
+	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+func (s *appServer) openPublicLock(w http.ResponseWriter, r *http.Request, keyData []byte) {
+	form, files, ok := readMultipartInMemory(w, r)
+	if !ok {
+		return
+	}
+	lockData := files["lock"].Data
+	if len(lockData) == 0 {
+		http.Error(w, "lock file is required", http.StatusBadRequest)
+		return
+	}
+	plain, name, err := unlockPair(lockData, keyData, form["pin"])
+	if err != nil {
+		s.recordFailure("unlock_failures", clientIP(r))
+		http.Error(w, "unlock failed", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, map[string]any{"name": name, "data": base64.StdEncoding.EncodeToString(plain)})
+}
+
 func (s *appServer) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin/")
 	switch {
-	case path == "artifacts" && r.Method == http.MethodGet:
+	case path == "keys" && r.Method == http.MethodGet:
 		s.listArtifacts(w, r)
-	case strings.HasPrefix(path, "artifacts/") && strings.HasSuffix(path, "/download") && r.Method == http.MethodGet:
-		s.downloadArtifact(w, r)
-	case strings.HasPrefix(path, "artifacts/") && r.Method == http.MethodDelete:
-		s.deleteArtifact(w, r)
+	case strings.HasPrefix(path, "keys/") && strings.HasSuffix(path, "/download") && r.Method == http.MethodGet:
+		s.downloadKey(w, r)
+	case strings.HasPrefix(path, "keys/") && r.Method == http.MethodDelete:
+		s.deleteKey(w, r)
 	case path == "encrypt" && r.Method == http.MethodPost:
 		s.encryptArtifact(w, r)
-	case path == "decrypt" && r.Method == http.MethodPost:
-		s.decryptArtifact(w, r)
+	case path == "open" && r.Method == http.MethodPost:
+		s.openLock(w, r)
 	case path == "relock" && r.Method == http.MethodPost:
 		s.relockArtifact(w, r)
-	case path == "bundle-qr" && r.Method == http.MethodPost:
-		s.bundleQR(w, r)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
 
 func (s *appServer) listArtifacts(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(`SELECT id, name, filename, length(data), created_at, updated_at FROM artifacts ORDER BY updated_at DESC, id DESC`)
+	keyRows, err := s.db.Query(`SELECT id, name, filename, token, created_at FROM registry_keys ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
-	items := []artifact{}
-	for rows.Next() {
-		var item artifact
-		if err := rows.Scan(&item.ID, &item.Name, &item.Filename, &item.Size, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	defer keyRows.Close()
+	keys := []registryKey{}
+	for keyRows.Next() {
+		var item registryKey
+		if err := keyRows.Scan(&item.ID, &item.Name, &item.Filename, &item.Token, &item.CreatedAt); err != nil {
 			http.Error(w, "server error", http.StatusInternalServerError)
 			return
 		}
-		items = append(items, item)
+		keys = append(keys, item)
 	}
-	lockRows, err := s.db.Query(`SELECT l.id, l.name, l.token, a.filename, l.created_at FROM registry_locks l JOIN artifacts a ON a.id = l.lock_artifact_id ORDER BY l.created_at DESC, l.id DESC`)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	defer lockRows.Close()
-	locks := []registryLock{}
-	for lockRows.Next() {
-		var item registryLock
-		if err := lockRows.Scan(&item.ID, &item.Name, &item.Token, &item.Filename, &item.CreatedAt); err != nil {
-			http.Error(w, "server error", http.StatusInternalServerError)
-			return
-		}
-		locks = append(locks, item)
-	}
-	writeJSON(w, map[string]any{"artifacts": items, "locks": locks})
+	writeJSON(w, map[string]any{"keys": keys})
 }
 
-func (s *appServer) uploadArtifact(w http.ResponseWriter, r *http.Request) {
-	name, filename, contentType, data, ok := s.readMultipartAsset(w, r)
-	if !ok {
-		return
-	}
-	id, err := s.insertArtifact(name, filename, contentType, data)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{"id": id})
+func keyIDFromPath(path string) (int64, error) {
+	part := strings.TrimSuffix(strings.TrimPrefix(path, "/api/admin/keys/"), "/download")
+	return strconv.ParseInt(strings.Trim(part, "/"), 10, 64)
 }
 
-func (s *appServer) downloadArtifact(w http.ResponseWriter, r *http.Request) {
-	id, err := idFromArtifactPath(r.URL.Path)
+func (s *appServer) keyData(id int64) (string, string, []byte, error) {
+	var name, filename string
+	var data []byte
+	err := s.db.QueryRow(`SELECT name, filename, data FROM registry_keys WHERE id = ?`, id).Scan(&name, &filename, &data)
+	return name, filename, data, err
+}
+
+func (s *appServer) downloadKey(w http.ResponseWriter, r *http.Request) {
+	id, err := keyIDFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	name, filename, contentType, data, err := s.artifactData(id)
+	name, filename, data, err := s.keyData(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if filename == "" {
-		filename = name
+		filename = name + ".key"
 	}
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(filename)+`"`)
 	w.Write(data)
 }
 
-func (s *appServer) deleteArtifact(w http.ResponseWriter, r *http.Request) {
-	id, err := idFromArtifactPath(r.URL.Path)
+func (s *appServer) deleteKey(w http.ResponseWriter, r *http.Request) {
+	id, err := keyIDFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	s.db.Exec(`DELETE FROM artifacts WHERE id = ?`, id)
+	s.db.Exec(`DELETE FROM registry_keys WHERE id = ?`, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *appServer) encryptArtifact(w http.ResponseWriter, r *http.Request) {
-	name, filename, _, data, ok := s.readMultipartAsset(w, r)
+	name, filename, pin, data, ok := s.readMultipartAsset(w, r)
 	if !ok {
 		return
 	}
-	pin := r.FormValue("pin")
 	if err := validatePin(pin); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -524,131 +639,44 @@ func (s *appServer) encryptArtifact(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encrypt failed", http.StatusInternalServerError)
 		return
 	}
-	lockID, err := s.insertArtifact(name+" lock", outputName(filename, ".lock"), "application/octet-stream", locked)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	bundleID, err := s.insertArtifact(name+" bundle", outputName(filename, ".bundle"), "application/octet-stream", bundle)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	token := randomToken(18)
 	now := s.now().Unix()
-	result, err := s.db.Exec(`INSERT INTO registry_locks (name, token, lock_artifact_id, bundle_artifact_id, created_at) VALUES (?, ?, ?, ?, ?)`, name, token, lockID, bundleID, now)
+	keyFilename := outputName(filename, ".key")
+	token := randomToken(24)
+	result, err := s.db.Exec(`INSERT INTO registry_keys (name, filename, data, token, created_at) VALUES (?, ?, ?, ?, ?)`, name, keyFilename, bundle, token, now)
 	if err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
-	registryID, _ := result.LastInsertId()
-	writeJSON(w, map[string]any{"lock_id": lockID, "bundle_id": bundleID, "registry_id": registryID, "token": token, "url": publicLockURL(r, token), "qr_url": "/api/locks/" + token + "/qr.png"})
+	keyID, _ := result.LastInsertId()
+	writeJSON(w, map[string]any{
+		"key_id": keyID, "key_name": keyFilename, "lock_name": outputName(filename, ".lock"),
+		"lock_data": base64.StdEncoding.EncodeToString(locked), "public_url": "/key/" + token,
+	})
 }
 
-func publicLockURL(r *http.Request, token string) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded == "http" || forwarded == "https" {
-		scheme = forwarded
-	}
-	return scheme + "://" + r.Host + "/l/" + token
-}
-
-func (s *appServer) handlePublicLock(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	token := strings.TrimPrefix(r.URL.Path, "/l/")
-	var name string
-	if token == "" || s.db.QueryRow(`SELECT name FROM registry_locks WHERE token = ?`, token).Scan(&name) != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	accessTemplate.Execute(w, map[string]string{"Name": name, "Token": token})
-}
-
-func (s *appServer) publicLockData(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/locks/"), "/")
-	if len(parts) < 1 || parts[0] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	var name, filename string
-	var data []byte
-	err := s.db.QueryRow(`SELECT l.name, a.filename, a.data FROM registry_locks l JOIN artifacts a ON a.id = l.lock_artifact_id WHERE l.token = ?`, parts[0]).Scan(&name, &filename, &data)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if len(parts) == 2 && parts[1] == "qr.png" {
-		png, err := qrcode.Encode(publicLockURL(r, parts[0]), qrcode.Medium, 384)
-		if err != nil {
-			http.Error(w, "could not create QR code", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		w.Write(png)
-		return
-	}
-	if len(parts) != 1 {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, map[string]any{"name": name, "filename": filename, "data": base64.StdEncoding.EncodeToString(data)})
-}
-
-func (s *appServer) bundleQR(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-		http.Error(w, "invalid upload", http.StatusBadRequest)
-		return
-	}
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "bundle is required", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-	bundle, err := io.ReadAll(file)
-	if err != nil {
-		http.Error(w, "could not read bundle", http.StatusBadRequest)
-		return
-	}
-	if _, err := decodeBundle(bundle); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	payload := "cleaver-bundle:" + base64.RawURLEncoding.EncodeToString(bundle)
-	png, err := qrcode.Encode(payload, qrcode.Medium, 512)
-	if err != nil {
-		http.Error(w, "bundle is too large for a QR code", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Content-Disposition", `attachment; filename="cleaver-bundle-qr.png"`)
-	w.Write(png)
-}
-
-func (s *appServer) decryptArtifact(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AssetIDs []int64 `json:"asset_ids"`
-		PIN      string  `json:"pin"`
-	}
-	if !readJSON(w, r, &req) {
-		return
-	}
-	plain, name, ok := s.tryUnlock(w, r, req.AssetIDs, req.PIN)
+func (s *appServer) openLock(w http.ResponseWriter, r *http.Request) {
+	form, files, ok := readMultipartInMemory(w, r)
 	if !ok {
+		return
+	}
+	keyID, err := strconv.ParseInt(form["key_id"], 10, 64)
+	if err != nil {
+		http.Error(w, "choose a key", http.StatusBadRequest)
+		return
+	}
+	lockData := files["lock"].Data
+	if len(lockData) == 0 {
+		http.Error(w, "lock file is required", http.StatusBadRequest)
+		return
+	}
+	_, _, keyData, err := s.keyData(keyID)
+	if err != nil {
+		http.Error(w, "key not found", http.StatusNotFound)
+		return
+	}
+	plain, name, err := unlockPair(lockData, keyData, form["pin"])
+	if err != nil {
+		http.Error(w, "unlock failed", http.StatusUnauthorized)
 		return
 	}
 	writeJSON(w, map[string]any{"name": name, "data": base64.StdEncoding.EncodeToString(plain)})
@@ -656,135 +684,99 @@ func (s *appServer) decryptArtifact(w http.ResponseWriter, r *http.Request) {
 
 func (s *appServer) relockArtifact(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		AssetIDs []int64 `json:"asset_ids"`
-		PIN      string  `json:"pin"`
-		CSV      string  `json:"csv"`
+		KeyID    int64  `json:"key_id"`
+		LockData string `json:"lock_data"`
+		PIN      string `json:"pin"`
+		CSV      string `json:"csv"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	_, name, ok := s.tryUnlock(w, r, req.AssetIDs, req.PIN)
-	if !ok {
+	if req.KeyID == 0 || req.LockData == "" {
+		http.Error(w, "key and lock are required", http.StatusBadRequest)
 		return
 	}
-	if len(req.AssetIDs) != 2 {
-		http.Error(w, "choose exactly two registry assets", http.StatusBadRequest)
-		return
-	}
-	_, _, _, left, err := s.artifactData(req.AssetIDs[0])
+	lockData, err := base64.StdEncoding.DecodeString(req.LockData)
 	if err != nil {
-		http.Error(w, "asset not found", http.StatusNotFound)
+		http.Error(w, "invalid lock data", http.StatusBadRequest)
 		return
 	}
-	_, _, _, right, err := s.artifactData(req.AssetIDs[1])
+	_, _, keyData, err := s.keyData(req.KeyID)
 	if err != nil {
-		http.Error(w, "asset not found", http.StatusNotFound)
+		http.Error(w, "key not found", http.StatusNotFound)
 		return
 	}
-	lockID, lockData, bundleBytes := req.AssetIDs[0], left, right
-	if bytes.HasPrefix(right, lockMagic) {
-		lockID, lockData, bundleBytes = req.AssetIDs[1], right, left
+	_, name, err := unlockPair(lockData, keyData, req.PIN)
+	if err != nil {
+		http.Error(w, "unlock failed", http.StatusUnauthorized)
+		return
 	}
-	lockBytes, err := relockWithLockAndBundle([]byte(req.CSV), name, req.PIN, lockData, bundleBytes)
+	updated, err := relockWithLockAndBundle([]byte(req.CSV), name, req.PIN, lockData, keyData)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	now := s.now().Unix()
-	if _, err := s.db.Exec(`UPDATE artifacts SET data = ?, updated_at = ? WHERE id = ?`, lockBytes, now, lockID); err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{"id": lockID})
-}
-
-func (s *appServer) tryUnlock(w http.ResponseWriter, r *http.Request, ids []int64, pin string) ([]byte, string, bool) {
-	ip := clientIP(r)
-	allowed, err := s.checkFailureLimit("unlock_failures", ip)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return nil, "", false
-	}
-	if !allowed {
-		http.Error(w, "too many unlock attempts", http.StatusForbidden)
-		return nil, "", false
-	}
-	if len(ids) != 2 {
-		http.Error(w, "choose exactly two registry assets", http.StatusBadRequest)
-		return nil, "", false
-	}
-	if err := validatePin(pin); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return nil, "", false
-	}
-	_, _, _, left, err := s.artifactData(ids[0])
-	if err != nil {
-		http.Error(w, "asset not found", http.StatusNotFound)
-		return nil, "", false
-	}
-	_, _, _, right, err := s.artifactData(ids[1])
-	if err != nil {
-		http.Error(w, "asset not found", http.StatusNotFound)
-		return nil, "", false
-	}
-	plain, name, err := unlockPair(left, right, pin)
-	if err == nil {
-		return plain, name, true
-	}
-	banned, recErr := s.recordFailure("unlock_failures", ip)
-	if recErr != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return nil, "", false
-	}
-	if banned {
-		http.Error(w, "too many unlock attempts", http.StatusForbidden)
-		return nil, "", false
-	}
-	http.Error(w, "unlock failed", http.StatusUnauthorized)
-	return nil, "", false
+	writeJSON(w, map[string]any{"name": outputName(name, ".lock"), "lock_data": base64.StdEncoding.EncodeToString(updated)})
 }
 
 func (s *appServer) readMultipartAsset(w http.ResponseWriter, r *http.Request) (string, string, string, []byte, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-		http.Error(w, "upload is too large or invalid", http.StatusBadRequest)
+	form, files, ok := readMultipartInMemory(w, r)
+	if !ok {
 		return "", "", "", nil, false
 	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
+	file := files["file"]
+	if len(file.Data) == 0 {
 		http.Error(w, "file is required", http.StatusBadRequest)
 		return "", "", "", nil, false
 	}
-	defer file.Close()
-	data, err := io.ReadAll(file)
-	if err != nil {
-		http.Error(w, "could not read upload", http.StatusBadRequest)
-		return "", "", "", nil, false
-	}
-	name := strings.TrimSpace(r.FormValue("name"))
+	name := strings.TrimSpace(form["name"])
 	if name == "" {
-		name = header.Filename
+		name = file.Filename
 	}
 	if name == "" {
 		name = "artifact"
 	}
-	return name, safeFilename(header.Filename), contentType(header, data), data, true
+	return name, safeFilename(file.Filename), form["pin"], file.Data, true
 }
 
-func (s *appServer) insertArtifact(name, filename, contentType string, data []byte) (int64, error) {
-	now := s.now().Unix()
-	result, err := s.db.Exec(`INSERT INTO artifacts (name, filename, content_type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, name, safeFilename(filename), contentType, data, now, now)
+type memoryUpload struct {
+	Filename string
+	Data     []byte
+}
+
+// readMultipartInMemory deliberately avoids ParseMultipartForm, which may use
+// temporary files. Uploaded bytes live only in request-scoped memory.
+func readMultipartInMemory(w http.ResponseWriter, r *http.Request) (map[string]string, map[string]memoryUpload, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	reader, err := r.MultipartReader()
 	if err != nil {
-		return 0, err
+		http.Error(w, "invalid upload", http.StatusBadRequest)
+		return nil, nil, false
 	}
-	return result.LastInsertId()
-}
-
-func (s *appServer) artifactData(id int64) (string, string, string, []byte, error) {
-	var name, filename, contentType string
-	var data []byte
-	err := s.db.QueryRow(`SELECT name, filename, content_type, data FROM artifacts WHERE id = ?`, id).Scan(&name, &filename, &contentType, &data)
-	return name, filename, contentType, data, err
+	fields := map[string]string{}
+	files := map[string]memoryUpload{}
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			http.Error(w, "invalid upload", http.StatusBadRequest)
+			return nil, nil, false
+		}
+		data, err := io.ReadAll(part)
+		part.Close()
+		if err != nil {
+			http.Error(w, "upload is too large or invalid", http.StatusBadRequest)
+			return nil, nil, false
+		}
+		if part.FileName() == "" {
+			fields[part.FormName()] = string(data)
+		} else {
+			files[part.FormName()] = memoryUpload{Filename: safeFilename(part.FileName()), Data: data}
+		}
+	}
+	return fields, files, true
 }
 
 func (s *appServer) checkFailureLimit(table, ip string) (bool, error) {
@@ -905,21 +897,6 @@ func clientIP(r *http.Request) string {
 
 func subtleEqualString(left, right string) bool {
 	return hmac.Equal([]byte(left), []byte(right))
-}
-
-func idFromArtifactPath(path string) (int64, error) {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 4 {
-		return 0, errors.New("bad path")
-	}
-	return strconv.ParseInt(parts[3], 10, 64)
-}
-
-func contentType(header *multipart.FileHeader, data []byte) string {
-	if header.Header.Get("Content-Type") != "" {
-		return header.Header.Get("Content-Type")
-	}
-	return http.DetectContentType(data)
 }
 
 func safeFilename(name string) string {
@@ -1196,27 +1173,6 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 </body>
 </html>`))
 
-var accessTemplate = template.Must(template.New("access").Parse(`<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Name}} · Cleaver</title><link rel="stylesheet" href="/styles.css"></head>
-<body class="access-page">
-  <main class="app-shell access-main" data-lock-token="{{.Token}}">
-    <div class="access-brand"><span class="brand-mark">C</span><span>Cleaver</span></div>
-    <section class="access-card" id="scanStep">
-      <p class="eyebrow">Secure lock</p><h1>{{.Name}}</h1>
-      <p class="access-copy">Take a photo of the QR code for your key bundle. Your bundle and PIN stay in this browser.</p>
-      <label class="scan-button" for="qrCamera"><span class="scan-icon">⌗</span><strong>Scan bundle</strong><small>Open camera</small></label>
-      <input class="camera-input" id="qrCamera" type="file" accept="image/*" capture="environment">
-      <div class="status" id="scanStatus" role="status"></div>
-      <details class="manual-access"><summary>Enter bundle manually</summary><div class="field"><label for="bundleFile">Bundle file</label><input class="input" id="bundleFile" type="file" accept=".bundle"></div><div class="field"><label for="bundleText">Bundle QR text</label><textarea class="input" id="bundleText" rows="3"></textarea></div><button class="secondary" id="useManualBundle" type="button">Use bundle</button></details>
-    </section>
-    <section class="access-card" id="pinStep" hidden><p class="eyebrow">Bundle accepted</p><h1>Enter your PIN</h1><form id="accessUnlockForm"><div class="field"><label for="accessPin">PIN</label><input class="input pin-input" id="accessPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div><button class="primary full" type="submit">Unlock {{.Name}}</button></form><div class="status" id="accessStatus" role="status"></div></section>
-    <section class="access-card access-results" id="accessResults" hidden><p class="eyebrow">Unlocked</p><h1>{{.Name}}</h1><div class="spreadsheet-scroll"><table class="spreadsheet result-grid" id="accessGrid"></table></div><button class="secondary" id="downloadUnlocked" type="button">Download CSV</button></section>
-  </main>
-  <script src="/jsQR.js" defer></script>
-  <script src="/access.js" defer></script>
-</body></html>`))
-
 var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -1230,48 +1186,42 @@ var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
     <div class="app-shell header-inner">
       <a class="brand admin-brand" href="/admin"><span class="brand-mark">C</span><span>Cleaver Admin</span></a>
       <nav class="site-nav" aria-label="Admin navigation">
-        <button class="tab active" data-admin-tab="registry" type="button">Locks</button>
+        <button class="tab active" data-admin-tab="registry" type="button">Keys</button>
         <button class="tab" data-admin-tab="encrypt" type="button">New lock</button>
-        <button class="tab" data-admin-tab="bundle" type="button">Bundle QR</button>
-        <button class="tab" data-admin-tab="unlock" type="button">Unlock</button>
+        <button class="tab" data-admin-tab="unlock" type="button">Open a lock</button>
       </nav>
       <a class="nav-cta" href="/logout">Logout</a>
     </div>
   </header>
   <main class="app-shell site-main admin-main">
     <section class="screen active" id="admin-registry">
-      <div class="page-head"><h2>Locks</h2><p>Each named CSV lock has a private, shareable access link and QR code.</p></div>
-      <div class="artifact-list" id="lockList"></div>
+      <div class="page-head"><h2>Your keys</h2><p>Keys stay safely in this portal. Lock files are never stored here.</p></div>
+      <div class="artifact-list" id="keyList"></div>
     </section>
     <section class="screen" id="admin-encrypt">
-      <div class="page-head"><h2>Create Lock</h2><p>Upload a CSV, name the lock, and choose its PIN. Cleaver creates the access link, lock QR, and bundle.</p></div>
+      <div class="page-head"><h2>Create a lock and key</h2><p>Upload a CSV and choose a PIN. The key is saved here; you download and manage the encrypted lock file.</p></div>
       <form class="panel form-panel" id="adminEncryptForm">
-        <div class="field"><label for="encryptName">Registry name</label><input class="input" id="encryptName" name="name" placeholder="Project asset"></div>
+        <div class="field"><label for="encryptName">Key name</label><input class="input" id="encryptName" name="name" placeholder="Project key"></div>
         <div class="field"><label for="encryptFile">CSV file</label><input class="input" id="encryptFile" name="file" type="file" accept=".csv,text/csv" required></div>
         <div class="field"><label for="encryptPin">PIN</label><input class="input" id="encryptPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div>
-        <button class="primary" type="submit">Encrypt and store</button>
+        <button class="primary" type="submit">Create lock and save key</button>
         <div class="status" id="adminEncryptStatus"></div>
       </form>
       <div class="panel lock-created" id="lockCreated" hidden></div>
     </section>
-    <section class="screen" id="admin-bundle">
-      <div class="page-head"><h2>Bundle to QR</h2><p>Turn a Cleaver bundle into a printable QR code. The complete bundle is contained in the image.</p></div>
-      <form class="panel form-panel" id="bundleQRForm"><div class="field"><label for="bundleQRFile">Bundle file</label><input class="input" id="bundleQRFile" name="file" type="file" accept=".bundle" required></div><button class="primary" type="submit">Create bundle QR</button><div class="status" id="bundleQRStatus"></div></form>
-      <div class="panel qr-result" id="bundleQRResult" hidden><img id="bundleQRImage" alt="Bundle QR code"><a class="secondary" id="bundleQRDownload" download="cleaver-bundle-qr.png">Download QR code</a></div>
-    </section>
     <section class="screen" id="admin-unlock">
-      <div class="page-head"><h2>Unlock Assets</h2><p>Pick any two artifacts and enter the PIN. Successful CSV unlocks open in spreadsheet mode and can be relocked into the same registry lock.</p></div>
+      <div class="page-head"><h2>Open a lock</h2><p>Choose its saved key, upload the lock file, and enter the PIN. After editing, download a new lock file.</p></div>
       <form class="panel form-panel" id="unlockForm">
         <div class="edit-credential-grid">
-          <div class="field"><label for="assetA">First artifact</label><select class="input" id="assetA" required></select></div>
-          <div class="field"><label for="assetB">Second artifact</label><select class="input" id="assetB" required></select></div>
+          <div class="field"><label for="keySelect">Saved key</label><select class="input" id="keySelect" required></select></div>
+          <div class="field"><label for="lockFile">Lock file</label><input class="input" id="lockFile" type="file" accept=".lock" required></div>
         </div>
         <div class="field"><label for="unlockPin">PIN</label><input class="input" id="unlockPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div>
-        <div class="actions"><button class="primary" type="submit">Unlock</button><button class="secondary" id="decryptDownload" type="button">Decrypt download</button></div>
+        <div class="actions"><button class="primary" type="submit">Unlock and edit</button><button class="secondary" id="decryptDownload" type="button">Download CSV</button></div>
         <div class="status" id="unlockStatus"></div>
       </form>
       <div class="text-workspace" id="adminWorkspace" hidden>
-        <div class="editor-toolbar"><div><h3 id="adminEditorTitle">Spreadsheet editor</h3><div class="hint" id="adminEditorMeta"></div></div><button class="primary" id="adminRelock" type="button">Relock into registry</button></div>
+        <div class="editor-toolbar"><div><h3 id="adminEditorTitle">Spreadsheet editor</h3><div class="hint" id="adminEditorMeta"></div></div><button class="primary" id="adminRelock" type="button">Download new lock</button></div>
         <div class="sheet-actions"><button class="secondary" id="adminAddRow" type="button">Add row</button><button class="secondary" id="adminAddColumn" type="button">Add column</button></div>
         <div class="spreadsheet-scroll"><table class="spreadsheet" id="adminGrid"></table></div>
         <div class="status" id="relockStatus"></div>
@@ -1281,3 +1231,24 @@ var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
   <script src="/admin.js" defer></script>
 </body>
 </html>`))
+
+var publicKeyTemplate = template.Must(template.New("public-key").Parse(`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Name}} · Cleaver</title><link rel="stylesheet" href="/styles.css"></head>
+<body data-key-token="{{.Token}}">
+  <header class="site-header"><div class="app-shell header-inner"><a class="brand admin-brand" href="/"><span class="brand-mark">C</span><span>Cleaver</span></a></div></header>
+  <main class="app-shell site-main admin-main">
+    <div class="page-head"><p class="eyebrow">Public key</p><h2>{{.Name}}</h2><p>Upload your lock and enter its PIN. Your lock and decrypted contents are processed only for this request and are not saved.</p></div>
+    <form class="panel form-panel" id="publicUnlockForm">
+      <div class="field"><label for="publicLockFile">Lock file</label><label class="dropzone" id="publicDropzone" for="publicLockFile"><span>Drop your lock file here</span><small>or choose a file</small></label><input class="file-input" id="publicLockFile" type="file" accept=".lock" required><div class="file-meta" id="publicLockMeta">No lock file selected.</div></div>
+      <div class="field"><label for="publicPin">PIN</label><input class="input" id="publicPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div>
+      <button class="primary" type="submit">Unlock and edit</button><div class="status" id="publicStatus"></div>
+    </form>
+    <div class="text-workspace" id="publicWorkspace" hidden>
+      <div class="editor-toolbar"><div><h3 id="publicEditorTitle">Spreadsheet editor</h3><div class="hint" id="publicEditorMeta"></div></div><button class="primary" id="publicRelock" type="button">Download new lock</button></div>
+      <div class="sheet-actions"><button class="secondary" id="publicAddRow" type="button">Add row</button><button class="secondary" id="publicAddColumn" type="button">Add column</button></div>
+      <div class="spreadsheet-scroll"><table class="spreadsheet" id="publicGrid"></table></div><div class="status" id="publicRelockStatus"></div>
+    </div>
+  </main>
+  <script src="/public-key.js" defer></script>
+</body></html>`))

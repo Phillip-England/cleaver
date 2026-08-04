@@ -63,14 +63,9 @@ To expose a different address:
 
 Public Cleaver pages remain available at `/`. The admin portal is available directly at `/login` and redirects protected admin routes to login when there is no valid signed session.
 
-After login, open `/admin` to:
+After login, open `/admin` to upload a CSV, save its key, and download the generated
+`.lock` file. Cleaver never stores the uploaded CSV or any lock file. Only keys are
+persisted in SQLite. Each key also has an unguessable public link where a lock can
+be uploaded, unlocked with its PIN, edited, and downloaded again without logging in.
 
-- upload CSV files and turn them into named registry locks
-- copy each lock's public link or download its QR code
-- download the generated bundle and convert any Cleaver bundle into a self-contained QR code
-- choose any two stored artifacts plus a PIN to attempt unlock
-- edit unlocked CSV files as a spreadsheet and relock back into the stored lock artifact
-
-Opening a registry lock link presents a camera-first bundle scanner. Photograph the bundle QR, enter the PIN, and the CSV is decrypted locally in the browser. The page also accepts a bundle file or the QR payload manually. Neither the PIN nor bundle is sent to the server.
-
-Failed admin logins are tracked in SQLite by client IP for 24 hours. Five recent failures returns HTTP 403. Failed admin unlock attempts use a separate SQLite ledger with the same 24-hour, five-failure rule.
+Failed admin logins are tracked in SQLite by client IP for 24 hours. Five recent failures returns HTTP 403. Failed admin bundle/PIN unlock attempts use a separate SQLite ledger with the same 24-hour, five-failure rule.
