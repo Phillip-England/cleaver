@@ -1,14 +1,15 @@
 const $ = (selector) => document.querySelector(selector);
 
 let artifacts = [];
+let locks = [];
 let editorState = null;
 
 document.querySelectorAll("[data-admin-tab]").forEach((button) => {
   button.addEventListener("click", () => activateAdminTab(button.dataset.adminTab));
 });
 
-$("#uploadForm").addEventListener("submit", uploadArtifact);
 $("#adminEncryptForm").addEventListener("submit", encryptArtifact);
+$("#bundleQRForm").addEventListener("submit", createBundleQR);
 $("#unlockForm").addEventListener("submit", unlockForEdit);
 $("#decryptDownload").addEventListener("click", decryptDownload);
 $("#adminRelock").addEventListener("click", relockCSV);
@@ -21,24 +22,9 @@ function activateAdminTab(name) {
   document.querySelectorAll("[data-admin-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminTab === name);
   });
-  ["registry", "encrypt", "unlock"].forEach((id) => {
+  ["registry", "encrypt", "bundle", "unlock"].forEach((id) => {
     $(`#admin-${id}`).classList.toggle("active", id === name);
   });
-}
-
-async function uploadArtifact(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const status = $("#uploadStatus");
-  setStatus(status, "Uploading...");
-  try {
-    await postForm("/api/admin/artifacts", form);
-    form.reset();
-    setStatus(status, "Artifact stored.");
-    await refreshArtifacts();
-  } catch (error) {
-    setStatus(status, error.message, true);
-  }
 }
 
 async function encryptArtifact(event) {
@@ -47,13 +33,40 @@ async function encryptArtifact(event) {
   const status = $("#adminEncryptStatus");
   setStatus(status, "Encrypting and storing...");
   try {
-    await postForm("/api/admin/encrypt", form);
+    const result = await postForm("/api/admin/encrypt", form);
     form.reset();
-    setStatus(status, "Lock and bundle stored in the registry.");
+    setStatus(status, "Lock created. Download the bundle before leaving this page.");
+    renderCreatedLock(result);
     await refreshArtifacts();
   } catch (error) {
     setStatus(status, error.message, true);
   }
+}
+
+function renderCreatedLock(result) {
+  const root = $("#lockCreated");
+  root.hidden = false;
+  root.innerHTML = `<h3>Lock ready</h3><img class="lock-qr" alt="QR code for lock link"><div class="field"><label>Access link</label><input class="input" readonly></div><div class="actions"><a class="secondary" target="_blank" rel="noopener">Open link</a><a class="secondary" download="lock-qr.png">Download lock QR</a><a class="primary">Download bundle</a></div>`;
+  root.querySelector("img").src = result.qr_url;
+  root.querySelector("input").value = result.url;
+  const links = root.querySelectorAll("a");
+  links[0].href = result.url; links[1].href = result.qr_url; links[2].href = `/api/admin/artifacts/${result.bundle_id}/download`;
+}
+
+async function createBundleQR(event) {
+  event.preventDefault();
+  const status = $("#bundleQRStatus");
+  setStatus(status, "Creating QR code...");
+  try {
+    const response = await fetch("/api/admin/bundle-qr", { method: "POST", body: new FormData(event.currentTarget) });
+    if (!response.ok) throw new Error(await response.text());
+    const url = URL.createObjectURL(await response.blob());
+    const result = $("#bundleQRResult");
+    const old = $("#bundleQRImage").src;
+    if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+    $("#bundleQRImage").src = url; $("#bundleQRDownload").href = url; result.hidden = false;
+    setStatus(status, "Bundle QR is ready.");
+  } catch (error) { setStatus(status, error.message, true); }
 }
 
 async function unlockForEdit(event) {
@@ -129,12 +142,30 @@ function selectedAssetIds() {
 async function refreshArtifacts() {
   const data = await getJSON("/api/admin/artifacts");
   artifacts = data.artifacts || [];
+  locks = data.locks || [];
+  renderLockList();
   renderArtifactList();
   renderArtifactSelects();
 }
 
+function renderLockList() {
+  const root = $("#lockList");
+  root.replaceChildren();
+  if (!locks.length) { root.innerHTML = `<div class="panel empty">No locks yet. Create one from a CSV.</div>`; return; }
+  for (const item of locks) {
+    const url = `${location.origin}/l/${item.token}`;
+    const row = document.createElement("div"); row.className = "artifact-row";
+    row.innerHTML = `<div><strong></strong><small></small></div><div class="actions"><button class="secondary" type="button">Copy link</button><a class="secondary" target="_blank" rel="noopener">Open</a><a class="secondary" download="lock-qr.png">QR code</a></div>`;
+    row.querySelector("strong").textContent = item.name; row.querySelector("small").textContent = item.filename;
+    const [copy, open, qr] = row.querySelectorAll("button,a");
+    copy.addEventListener("click", async () => { await navigator.clipboard.writeText(url); copy.textContent = "Copied"; });
+    open.href = url; qr.href = `/api/locks/${item.token}/qr.png`; root.append(row);
+  }
+}
+
 function renderArtifactList() {
   const root = $("#artifactList");
+  if (!root) return;
   root.innerHTML = "";
   if (!artifacts.length) {
     root.innerHTML = `<div class="panel empty">No artifacts stored.</div>`;

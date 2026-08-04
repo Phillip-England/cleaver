@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	qrcode "github.com/skip2/go-qrcode"
 	_ "modernc.org/sqlite"
 )
 
@@ -71,6 +72,14 @@ type artifact struct {
 	Size      int64  `json:"size"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
+}
+
+type registryLock struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Token     string `json:"token"`
+	Filename  string `json:"filename"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 type lockHeader struct {
@@ -252,6 +261,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS registry_locks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  lock_artifact_id INTEGER NOT NULL,
+  bundle_artifact_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(lock_artifact_id) REFERENCES artifacts(id),
+  FOREIGN KEY(bundle_artifact_id) REFERENCES artifacts(id)
+);
 `
 
 func browserURL(addr string) string {
@@ -311,6 +330,10 @@ func (s *appServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleAdminAPI(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/locks/"):
+		s.publicLockData(w, r)
+	case strings.HasPrefix(r.URL.Path, "/l/"):
+		s.handlePublicLock(w, r)
 	default:
 		s.public.ServeHTTP(w, r)
 	}
@@ -386,8 +409,6 @@ func (s *appServer) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "artifacts" && r.Method == http.MethodGet:
 		s.listArtifacts(w, r)
-	case path == "artifacts" && r.Method == http.MethodPost:
-		s.uploadArtifact(w, r)
 	case strings.HasPrefix(path, "artifacts/") && strings.HasSuffix(path, "/download") && r.Method == http.MethodGet:
 		s.downloadArtifact(w, r)
 	case strings.HasPrefix(path, "artifacts/") && r.Method == http.MethodDelete:
@@ -398,6 +419,8 @@ func (s *appServer) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		s.decryptArtifact(w, r)
 	case path == "relock" && r.Method == http.MethodPost:
 		s.relockArtifact(w, r)
+	case path == "bundle-qr" && r.Method == http.MethodPost:
+		s.bundleQR(w, r)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -419,7 +442,22 @@ func (s *appServer) listArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, map[string]any{"artifacts": items})
+	lockRows, err := s.db.Query(`SELECT l.id, l.name, l.token, a.filename, l.created_at FROM registry_locks l JOIN artifacts a ON a.id = l.lock_artifact_id ORDER BY l.created_at DESC, l.id DESC`)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	defer lockRows.Close()
+	locks := []registryLock{}
+	for lockRows.Next() {
+		var item registryLock
+		if err := lockRows.Scan(&item.ID, &item.Name, &item.Token, &item.Filename, &item.CreatedAt); err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		locks = append(locks, item)
+	}
+	writeJSON(w, map[string]any{"artifacts": items, "locks": locks})
 }
 
 func (s *appServer) uploadArtifact(w http.ResponseWriter, r *http.Request) {
@@ -477,6 +515,10 @@ func (s *appServer) encryptArtifact(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = filename
 	}
+	if !strings.HasSuffix(strings.ToLower(filename), ".csv") {
+		http.Error(w, "only CSV files can be locked", http.StatusBadRequest)
+		return
+	}
 	locked, bundle, err := encryptWithPIN(data, filename, pin)
 	if err != nil {
 		http.Error(w, "encrypt failed", http.StatusInternalServerError)
@@ -492,7 +534,109 @@ func (s *appServer) encryptArtifact(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"lock_id": lockID, "bundle_id": bundleID})
+	token := randomToken(18)
+	now := s.now().Unix()
+	result, err := s.db.Exec(`INSERT INTO registry_locks (name, token, lock_artifact_id, bundle_artifact_id, created_at) VALUES (?, ?, ?, ?, ?)`, name, token, lockID, bundleID, now)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	registryID, _ := result.LastInsertId()
+	writeJSON(w, map[string]any{"lock_id": lockID, "bundle_id": bundleID, "registry_id": registryID, "token": token, "url": publicLockURL(r, token), "qr_url": "/api/locks/" + token + "/qr.png"})
+}
+
+func publicLockURL(r *http.Request, token string) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded == "http" || forwarded == "https" {
+		scheme = forwarded
+	}
+	return scheme + "://" + r.Host + "/l/" + token
+}
+
+func (s *appServer) handlePublicLock(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := strings.TrimPrefix(r.URL.Path, "/l/")
+	var name string
+	if token == "" || s.db.QueryRow(`SELECT name FROM registry_locks WHERE token = ?`, token).Scan(&name) != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	accessTemplate.Execute(w, map[string]string{"Name": name, "Token": token})
+}
+
+func (s *appServer) publicLockData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/locks/"), "/")
+	if len(parts) < 1 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	var name, filename string
+	var data []byte
+	err := s.db.QueryRow(`SELECT l.name, a.filename, a.data FROM registry_locks l JOIN artifacts a ON a.id = l.lock_artifact_id WHERE l.token = ?`, parts[0]).Scan(&name, &filename, &data)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "qr.png" {
+		png, err := qrcode.Encode(publicLockURL(r, parts[0]), qrcode.Medium, 384)
+		if err != nil {
+			http.Error(w, "could not create QR code", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Write(png)
+		return
+	}
+	if len(parts) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, map[string]any{"name": name, "filename": filename, "data": base64.StdEncoding.EncodeToString(data)})
+}
+
+func (s *appServer) bundleQR(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		http.Error(w, "invalid upload", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "bundle is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	bundle, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "could not read bundle", http.StatusBadRequest)
+		return
+	}
+	if _, err := decodeBundle(bundle); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	payload := "cleaver-bundle:" + base64.RawURLEncoding.EncodeToString(bundle)
+	png, err := qrcode.Encode(payload, qrcode.Medium, 512)
+	if err != nil {
+		http.Error(w, "bundle is too large for a QR code", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", `attachment; filename="cleaver-bundle-qr.png"`)
+	w.Write(png)
 }
 
 func (s *appServer) decryptArtifact(w http.ResponseWriter, r *http.Request) {
@@ -1052,6 +1196,26 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 </body>
 </html>`))
 
+var accessTemplate = template.Must(template.New("access").Parse(`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Name}} · Cleaver</title><link rel="stylesheet" href="/styles.css"></head>
+<body class="access-page">
+  <main class="app-shell access-main" data-lock-token="{{.Token}}">
+    <div class="access-brand"><span class="brand-mark">C</span><span>Cleaver</span></div>
+    <section class="access-card" id="scanStep">
+      <p class="eyebrow">Secure lock</p><h1>{{.Name}}</h1>
+      <p class="access-copy">Scan the QR code for your key bundle. Your bundle and PIN stay in this browser.</p>
+      <button class="scan-button" id="startScanner" type="button"><span class="scan-icon">⌗</span><strong>Scan bundle</strong><small>Open camera</small></button>
+      <video id="scannerVideo" class="scanner-video" playsinline hidden></video>
+      <div class="status" id="scanStatus" role="status"></div>
+      <details class="manual-access"><summary>Enter bundle manually</summary><div class="field"><label for="bundleFile">Bundle file</label><input class="input" id="bundleFile" type="file" accept=".bundle"></div><div class="field"><label for="bundleText">Bundle QR text</label><textarea class="input" id="bundleText" rows="3"></textarea></div><button class="secondary" id="useManualBundle" type="button">Use bundle</button></details>
+    </section>
+    <section class="access-card" id="pinStep" hidden><p class="eyebrow">Bundle accepted</p><h1>Enter your PIN</h1><form id="accessUnlockForm"><div class="field"><label for="accessPin">PIN</label><input class="input pin-input" id="accessPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div><button class="primary full" type="submit">Unlock {{.Name}}</button></form><div class="status" id="accessStatus" role="status"></div></section>
+    <section class="access-card access-results" id="accessResults" hidden><p class="eyebrow">Unlocked</p><h1>{{.Name}}</h1><div class="spreadsheet-scroll"><table class="spreadsheet result-grid" id="accessGrid"></table></div><button class="secondary" id="downloadUnlocked" type="button">Download CSV</button></section>
+  </main>
+  <script src="/access.js" defer></script>
+</body></html>`))
+
 var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -1065,8 +1229,9 @@ var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
     <div class="app-shell header-inner">
       <a class="brand admin-brand" href="/admin"><span class="brand-mark">C</span><span>Cleaver Admin</span></a>
       <nav class="site-nav" aria-label="Admin navigation">
-        <button class="tab active" data-admin-tab="registry" type="button">Registry</button>
-        <button class="tab" data-admin-tab="encrypt" type="button">Encrypt</button>
+        <button class="tab active" data-admin-tab="registry" type="button">Locks</button>
+        <button class="tab" data-admin-tab="encrypt" type="button">New lock</button>
+        <button class="tab" data-admin-tab="bundle" type="button">Bundle QR</button>
         <button class="tab" data-admin-tab="unlock" type="button">Unlock</button>
       </nav>
       <a class="nav-cta" href="/logout">Logout</a>
@@ -1074,24 +1239,24 @@ var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
   </header>
   <main class="app-shell site-main admin-main">
     <section class="screen active" id="admin-registry">
-      <div class="page-head"><h2>Artifact Registry</h2><p>Upload files under operational names. The registry does not classify locks or bundles.</p></div>
-      <form class="panel form-panel" id="uploadForm">
-        <div class="field"><label for="uploadName">Name</label><input class="input" id="uploadName" name="name" placeholder="Elephant"></div>
-        <div class="field"><label for="uploadFile">Artifact</label><input class="input" id="uploadFile" name="file" type="file" required></div>
-        <button class="primary" type="submit">Upload artifact</button>
-        <div class="status" id="uploadStatus"></div>
-      </form>
-      <div class="artifact-list" id="artifactList"></div>
+      <div class="page-head"><h2>Locks</h2><p>Each named CSV lock has a private, shareable access link and QR code.</p></div>
+      <div class="artifact-list" id="lockList"></div>
     </section>
     <section class="screen" id="admin-encrypt">
-      <div class="page-head"><h2>Encrypt Into Registry</h2><p>Create a lock and bundle from an uploaded source file, then store both as named artifacts.</p></div>
+      <div class="page-head"><h2>Create Lock</h2><p>Upload a CSV, name the lock, and choose its PIN. Cleaver creates the access link, lock QR, and bundle.</p></div>
       <form class="panel form-panel" id="adminEncryptForm">
         <div class="field"><label for="encryptName">Registry name</label><input class="input" id="encryptName" name="name" placeholder="Project asset"></div>
-        <div class="field"><label for="encryptFile">Source file</label><input class="input" id="encryptFile" name="file" type="file" required></div>
+        <div class="field"><label for="encryptFile">CSV file</label><input class="input" id="encryptFile" name="file" type="file" accept=".csv,text/csv" required></div>
         <div class="field"><label for="encryptPin">PIN</label><input class="input" id="encryptPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div>
         <button class="primary" type="submit">Encrypt and store</button>
         <div class="status" id="adminEncryptStatus"></div>
       </form>
+      <div class="panel lock-created" id="lockCreated" hidden></div>
+    </section>
+    <section class="screen" id="admin-bundle">
+      <div class="page-head"><h2>Bundle to QR</h2><p>Turn a Cleaver bundle into a printable QR code. The complete bundle is contained in the image.</p></div>
+      <form class="panel form-panel" id="bundleQRForm"><div class="field"><label for="bundleQRFile">Bundle file</label><input class="input" id="bundleQRFile" name="file" type="file" accept=".bundle" required></div><button class="primary" type="submit">Create bundle QR</button><div class="status" id="bundleQRStatus"></div></form>
+      <div class="panel qr-result" id="bundleQRResult" hidden><img id="bundleQRImage" alt="Bundle QR code"><a class="secondary" id="bundleQRDownload" download="cleaver-bundle-qr.png">Download QR code</a></div>
     </section>
     <section class="screen" id="admin-unlock">
       <div class="page-head"><h2>Unlock Assets</h2><p>Pick any two artifacts and enter the PIN. Successful CSV unlocks open in spreadsheet mode and can be relocked into the same registry lock.</p></div>
