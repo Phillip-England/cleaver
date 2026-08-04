@@ -159,7 +159,7 @@ function setupDropzone(inputId, zoneId, metaId, bundleInputId = "") {
     if (bundleInputId) {
       const selectedFiles = Array.from(input.files);
       const lockFile = selectedFiles.find((file) => file.name.toLowerCase().endsWith(".lock"));
-      selectedBundle = selectedFiles.find((file) => file.name.toLowerCase().endsWith(".bundle"));
+      selectedBundle = selectedFiles.find((file) => /\.(bundle|key)$/i.test(file.name));
       if (lockFile) setInputFiles(input, [lockFile]);
       if (selectedBundle) {
         const bundleInput = $("#" + bundleInputId);

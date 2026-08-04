@@ -650,7 +650,9 @@ func (s *appServer) encryptArtifact(w http.ResponseWriter, r *http.Request) {
 	keyID, _ := result.LastInsertId()
 	writeJSON(w, map[string]any{
 		"key_id": keyID, "key_name": keyFilename, "lock_name": outputName(filename, ".lock"),
-		"lock_data": base64.StdEncoding.EncodeToString(locked), "public_url": "/key/" + token,
+		"lock_data":        base64.StdEncoding.EncodeToString(locked),
+		"key_download_url": fmt.Sprintf("/api/admin/keys/%d/download", keyID),
+		"public_url":       "/key/" + token,
 	})
 }
 
@@ -1195,11 +1197,11 @@ var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html>
   </header>
   <main class="app-shell site-main admin-main">
     <section class="screen active" id="admin-registry">
-      <div class="page-head"><h2>Your keys</h2><p>Keys stay safely in this portal. Lock files are never stored here.</p></div>
+      <div class="page-head"><h2>Your keys</h2><p>Keys stay safely in this portal and can also be downloaded for backup. Lock files are never stored here.</p></div>
       <div class="artifact-list" id="keyList"></div>
     </section>
     <section class="screen" id="admin-encrypt">
-      <div class="page-head"><h2>Create a lock and key</h2><p>Upload a CSV and choose a PIN. The key is saved here; you download and manage the encrypted lock file.</p></div>
+      <div class="page-head"><h2>Create a lock and key</h2><p>Upload a CSV and choose a PIN. You will receive a downloadable lock, a downloadable backup key, and a public unlock link.</p></div>
       <form class="panel form-panel" id="adminEncryptForm">
         <div class="field"><label for="encryptName">Key name</label><input class="input" id="encryptName" name="name" placeholder="Project key"></div>
         <div class="field"><label for="encryptFile">CSV file</label><input class="input" id="encryptFile" name="file" type="file" accept=".csv,text/csv" required></div>

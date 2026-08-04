@@ -33,7 +33,7 @@ async function encryptArtifact(event) {
   try {
     const result = await postForm("/api/admin/encrypt", form);
     form.reset();
-    setStatus(status, "Key saved. Download your lock file now.");
+    setStatus(status, "Ready. Download both recovery files and save the public link.");
     renderCreatedLock(result);
     await refreshArtifacts();
   } catch (error) {
@@ -44,11 +44,17 @@ async function encryptArtifact(event) {
 function renderCreatedLock(result) {
   const root = $("#lockCreated");
   root.hidden = false;
-  root.innerHTML = `<h3>Lock ready</h3><p>The key is saved in this portal. Keep the downloaded lock file wherever you choose.</p><div class="actions"><a class="primary">Download lock file</a><a class="secondary">Open public key link</a></div>`;
+  root.innerHTML = `<h3>Recovery kit ready</h3><p>Download both files and save the public link. The key remains in this portal, but your downloaded copy lets you recover if you lose portal access.</p><div class="actions"><a class="primary">Download lock file</a><a class="secondary">Download backup key</a><a class="secondary" target="_blank" rel="noopener">Open public unlock link</a><button class="secondary copy-created-link" type="button">Copy public link</button></div>`;
   const links = root.querySelectorAll("a");
   links[0].href = downloadBase64(result.lock_data, result.lock_name);
   links[0].download = result.lock_name;
-  links[1].href = result.public_url;
+  links[1].href = result.key_download_url;
+  links[1].download = result.key_name;
+  links[2].href = result.public_url;
+  root.querySelector(".copy-created-link").addEventListener("click", async (event) => {
+    await navigator.clipboard.writeText(new URL(result.public_url, location.origin).href);
+    event.currentTarget.textContent = "Copied";
+  });
 }
 
 async function unlockForEdit(event) {
@@ -141,10 +147,16 @@ function renderKeyList() {
   if (!keys.length) { root.innerHTML = `<div class="panel empty">No keys yet. Upload a CSV to create your first lock and key.</div>`; return; }
   for (const item of keys) {
     const row = document.createElement("div"); row.className = "artifact-row";
-    row.innerHTML = `<div><strong></strong><small></small></div><div class="actions"><a class="secondary">Open public link</a><button class="secondary copy-link" type="button">Copy link</button><button class="secondary delete-key" type="button">Delete</button></div>`;
+    row.innerHTML = `<div><strong></strong><small></small></div><div class="actions"><a class="secondary download-key">Download key</a><a class="secondary public-link">Open public link</a><button class="secondary copy-link" type="button">Copy link</button><button class="secondary delete-key" type="button">Delete</button></div>`;
     row.querySelector("strong").textContent = item.name; row.querySelector("small").textContent = item.filename;
     const publicURL = `${location.origin}/key/${item.token}`;
-    row.querySelector("a").href = publicURL;
+    const keyLink = row.querySelector(".download-key");
+    keyLink.href = `/api/admin/keys/${item.id}/download`;
+    keyLink.download = item.filename;
+    const publicLink = row.querySelector(".public-link");
+    publicLink.href = publicURL;
+    publicLink.target = "_blank";
+    publicLink.rel = "noopener";
     row.querySelector(".copy-link").addEventListener("click", async (event) => { await navigator.clipboard.writeText(publicURL); event.currentTarget.textContent = "Copied"; });
     row.querySelector(".delete-key").addEventListener("click", async () => { await fetch(`/api/admin/keys/${item.id}`, { method: "DELETE" }); await refreshArtifacts(); });
     root.append(row);

@@ -131,7 +131,7 @@
               <span>Drop a lock file and bundle here</span>
               <small>or choose both files together</small>
             </label>
-            <input class="file-input" id="decryptAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
+            <input class="file-input" id="decryptAsset" name="asset" type="file" accept=".lock,.bundle,.key" multiple required>
             <div class="file-meta" id="decryptFileMeta">No lock file selected.</div>
           </div>
 
@@ -142,8 +142,8 @@
             <input class="input" id="decryptPin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
           </div>
           <div class="field">
-            <label for="decryptShards">Key bundle (if not selected above)</label>
-            <input class="input" id="decryptShards" name="shards" type="file" multiple>
+            <label for="decryptShards">Key bundle or backup key (if not selected above)</label>
+            <input class="input" id="decryptShards" name="shards" type="file" accept=".bundle,.key" multiple>
           </div>
 
           <div class="actions split-actions">
@@ -176,7 +176,7 @@
               <span>Drop a lock file and bundle here</span>
               <small>or choose both files together</small>
             </label>
-            <input class="file-input" id="editAsset" name="asset" type="file" accept=".lock,.bundle" multiple required>
+            <input class="file-input" id="editAsset" name="asset" type="file" accept=".lock,.bundle,.key" multiple required>
             <div class="file-meta" id="editFileMeta">No lock file selected.</div>
           </div>
           <div class="field">

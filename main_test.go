@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +13,66 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAdminCSVUploadReturnsCompleteRecoveryKit(t *testing.T) {
+	s := newTestAppServer(t)
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+	_ = writer.WriteField("name", "Quarterly report")
+	_ = writer.WriteField("pin", "2468")
+	part, err := writer.CreateFormFile("file", "report.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("name,total\nAda,42\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/encrypt", &requestBody)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.encryptArtifact(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		LockData       string `json:"lock_data"`
+		LockName       string `json:"lock_name"`
+		KeyName        string `json:"key_name"`
+		KeyDownloadURL string `json:"key_download_url"`
+		PublicURL      string `json:"public_url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.LockName != "report.lock" || result.KeyName != "report.key" {
+		t.Fatalf("unexpected recovery filenames: lock=%q key=%q", result.LockName, result.KeyName)
+	}
+	if result.KeyDownloadURL == "" || result.PublicURL == "" {
+		t.Fatalf("missing recovery URLs: key=%q public=%q", result.KeyDownloadURL, result.PublicURL)
+	}
+
+	keyReq := httptest.NewRequest(http.MethodGet, result.KeyDownloadURL, nil)
+	keyRec := httptest.NewRecorder()
+	s.downloadKey(keyRec, keyReq)
+	if keyRec.Code != http.StatusOK || keyRec.Body.Len() == 0 {
+		t.Fatalf("key download status %d: %s", keyRec.Code, keyRec.Body.String())
+	}
+	locked, err := base64.StdEncoding.DecodeString(result.LockData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, name, err := unlockPair(locked, keyRec.Body.Bytes(), "2468")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "report.csv" || string(plain) != "name,total\nAda,42\n" {
+		t.Fatalf("downloaded recovery kit did not unlock original CSV: name=%q data=%q", name, plain)
+	}
+}
 
 func TestStaticHandlerServesIndex(t *testing.T) {
 	handler, err := staticHandler()
@@ -172,7 +235,7 @@ func TestLockWorkflowsAcceptLockAndBundleTogether(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()
 	for _, id := range []string{"decryptAsset", "editAsset"} {
-		want := []byte(`id="` + id + `" name="asset" type="file" accept=".lock,.bundle" multiple`)
+		want := []byte(`id="` + id + `" name="asset" type="file" accept=".lock,.bundle,.key" multiple`)
 		if !bytes.Contains(body, want) {
 			t.Fatalf("combined lock and bundle picker missing for %s", id)
 		}
@@ -182,7 +245,7 @@ func TestLockWorkflowsAcceptLockAndBundleTogether(t *testing.T) {
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	body = rec.Body.Bytes()
-	for _, text := range [][]byte{[]byte(`selectedFiles.find`), []byte(`endsWith(".bundle")`), []byte(`setInputFiles(bundleInput`)} {
+	for _, text := range [][]byte{[]byte(`selectedFiles.find`), []byte(`bundle|key`), []byte(`setInputFiles(bundleInput`)} {
 		if !bytes.Contains(body, text) {
 			t.Fatalf("combined picker logic did not include %q", text)
 		}

@@ -63,9 +63,12 @@ To expose a different address:
 
 Public Cleaver pages remain available at `/`. The admin portal is available directly at `/login` and redirects protected admin routes to login when there is no valid signed session.
 
-After login, open `/admin` to upload a CSV, save its key, and download the generated
-`.lock` file. Cleaver never stores the uploaded CSV or any lock file. Only keys are
-persisted in SQLite. Each key also has an unguessable public link where a lock can
-be uploaded, unlocked with its PIN, edited, and downloaded again without logging in.
+After login, open `/admin` to upload a CSV. Each upload returns a downloadable `.lock`
+file, a downloadable backup `.key` file, and an unguessable public unlock link. Cleaver
+never stores the uploaded CSV or any lock file. Keys are persisted in SQLite and remain
+downloadable from the key registry. The public link lets someone upload the matching
+lock, unlock it with its PIN, edit it, and download it again without logging in.
+The public decrypt page also accepts the downloaded `.key` backup alongside its `.lock`
+file, so the pair remains usable even if the saved portal key is unavailable.
 
 Failed admin logins are tracked in SQLite by client IP for 24 hours. Five recent failures returns HTTP 403. Failed admin bundle/PIN unlock attempts use a separate SQLite ledger with the same 24-hour, five-failure rule.
