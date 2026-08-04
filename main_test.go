@@ -320,7 +320,7 @@ func TestPublicLockPageAndQR(t *testing.T) {
 
 	page := httptest.NewRecorder()
 	server.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/l/public-token", nil))
-	if page.Code != http.StatusOK || !bytes.Contains(page.Body.Bytes(), []byte(`id="startScanner"`)) {
+	if page.Code != http.StatusOK || !bytes.Contains(page.Body.Bytes(), []byte(`id="qrCamera" type="file" accept="image/*" capture="environment"`)) {
 		t.Fatalf("public page status %d", page.Code)
 	}
 

@@ -154,7 +154,7 @@ label { color: var(--ink); font-size: 13px; font-weight: 700; }
 .scan-button:hover { background: rgba(214,255,63,.14); }
 .scan-button .scan-icon { color: var(--accent); font-size: 64px; line-height: 1; }
 .scan-button strong { font-size: 20px; }.scan-button small { color: var(--muted); }
-.scanner-video { width: 100%; max-height: 400px; border: 1px solid var(--accent); border-radius: var(--radius-lg); object-fit: cover; }
+.camera-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .manual-access { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 18px; text-align: left; color: var(--muted); }
 .manual-access summary { cursor: pointer; text-align: center; }
 .manual-access[open] { display: grid; gap: 16px; }

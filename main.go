@@ -1204,15 +1204,16 @@ var accessTemplate = template.Must(template.New("access").Parse(`<!doctype html>
     <div class="access-brand"><span class="brand-mark">C</span><span>Cleaver</span></div>
     <section class="access-card" id="scanStep">
       <p class="eyebrow">Secure lock</p><h1>{{.Name}}</h1>
-      <p class="access-copy">Scan the QR code for your key bundle. Your bundle and PIN stay in this browser.</p>
-      <button class="scan-button" id="startScanner" type="button"><span class="scan-icon">⌗</span><strong>Scan bundle</strong><small>Open camera</small></button>
-      <video id="scannerVideo" class="scanner-video" playsinline hidden></video>
+      <p class="access-copy">Take a photo of the QR code for your key bundle. Your bundle and PIN stay in this browser.</p>
+      <label class="scan-button" for="qrCamera"><span class="scan-icon">⌗</span><strong>Scan bundle</strong><small>Open camera</small></label>
+      <input class="camera-input" id="qrCamera" type="file" accept="image/*" capture="environment">
       <div class="status" id="scanStatus" role="status"></div>
       <details class="manual-access"><summary>Enter bundle manually</summary><div class="field"><label for="bundleFile">Bundle file</label><input class="input" id="bundleFile" type="file" accept=".bundle"></div><div class="field"><label for="bundleText">Bundle QR text</label><textarea class="input" id="bundleText" rows="3"></textarea></div><button class="secondary" id="useManualBundle" type="button">Use bundle</button></details>
     </section>
     <section class="access-card" id="pinStep" hidden><p class="eyebrow">Bundle accepted</p><h1>Enter your PIN</h1><form id="accessUnlockForm"><div class="field"><label for="accessPin">PIN</label><input class="input pin-input" id="accessPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" required></div><button class="primary full" type="submit">Unlock {{.Name}}</button></form><div class="status" id="accessStatus" role="status"></div></section>
     <section class="access-card access-results" id="accessResults" hidden><p class="eyebrow">Unlocked</p><h1>{{.Name}}</h1><div class="spreadsheet-scroll"><table class="spreadsheet result-grid" id="accessGrid"></table></div><button class="secondary" id="downloadUnlocked" type="button">Download CSV</button></section>
   </main>
+  <script src="/jsQR.js" defer></script>
   <script src="/access.js" defer></script>
 </body></html>`))
 

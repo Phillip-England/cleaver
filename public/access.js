@@ -4,33 +4,34 @@ const bundleMagic = "CLEAVER-BUNDLE1\n";
 let bundleBytes = null;
 let lockRecord = null;
 let unlocked = null;
-let cameraStream = null;
 
-$("#startScanner").addEventListener("click", startScanner);
+$("#qrCamera").addEventListener("change", scanCameraImage);
 $("#useManualBundle").addEventListener("click", useManualBundle);
 $("#accessUnlockForm").addEventListener("submit", unlock);
 $("#downloadUnlocked").addEventListener("click", downloadUnlocked);
 
-async function startScanner() {
-  setStatus($("#scanStatus"), "Opening camera...");
+async function scanCameraImage(event) {
+  const file = event.currentTarget.files[0];
+  if (!file) return;
+  setStatus($("#scanStatus"), "Reading QR code...");
   try {
-    if (!("BarcodeDetector" in window)) throw new Error("QR scanning is not supported by this browser. Use the bundle file below instead.");
-    const formats = await BarcodeDetector.getSupportedFormats();
-    if (!formats.includes("qr_code")) throw new Error("This browser cannot scan QR codes. Use the bundle file below instead.");
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
-    const video = $("#scannerVideo"); video.srcObject = cameraStream; video.hidden = false; await video.play();
-    const detector = new BarcodeDetector({ formats: ["qr_code"] });
-    setStatus($("#scanStatus"), "Point the camera at your bundle QR code.");
-    const scan = async () => {
-      if (!cameraStream) return;
-      try {
-        const codes = await detector.detect(video);
-        if (codes[0]?.rawValue) { acceptBundlePayload(codes[0].rawValue); return; }
-      } catch {}
-      requestAnimationFrame(scan);
-    };
-    requestAnimationFrame(scan);
-  } catch (error) { stopCamera(); setStatus($("#scanStatus"), error.message, true); }
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    const result = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: "attemptBoth" });
+    if (!result?.data) throw new Error("No QR code was found. Retake the photo with the full code in focus.");
+    acceptBundlePayload(result.data);
+  } catch (error) {
+    setStatus($("#scanStatus"), error.message, true);
+  } finally {
+    event.currentTarget.value = "";
+  }
 }
 
 async function useManualBundle() {
@@ -50,12 +51,7 @@ function acceptBundleBytes(bytes) {
   const text = new TextDecoder().decode(bytes);
   if (!text.startsWith(bundleMagic)) throw new Error("That is not a Cleaver bundle.");
   JSON.parse(text.slice(bundleMagic.length));
-  bundleBytes = bytes; stopCamera(); $("#scanStep").hidden = true; $("#pinStep").hidden = false; $("#accessPin").focus();
-}
-
-function stopCamera() {
-  cameraStream?.getTracks().forEach((track) => track.stop()); cameraStream = null;
-  const video = $("#scannerVideo"); video.pause(); video.srcObject = null; video.hidden = true;
+  bundleBytes = bytes; $("#scanStep").hidden = true; $("#pinStep").hidden = false; $("#accessPin").focus();
 }
 
 async function unlock(event) {

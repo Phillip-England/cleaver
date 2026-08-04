@@ -71,6 +71,6 @@ After login, open `/admin` to:
 - choose any two stored artifacts plus a PIN to attempt unlock
 - edit unlocked CSV files as a spreadsheet and relock back into the stored lock artifact
 
-Opening a registry lock link presents a camera-first bundle scanner. Scan the bundle QR, enter the PIN, and the CSV is decrypted locally in the browser. The page also accepts a bundle file or the QR payload manually when camera scanning is unavailable. Neither the PIN nor bundle is sent to the server.
+Opening a registry lock link presents a camera-first bundle scanner. Photograph the bundle QR, enter the PIN, and the CSV is decrypted locally in the browser. The page also accepts a bundle file or the QR payload manually. Neither the PIN nor bundle is sent to the server.
 
 Failed admin logins are tracked in SQLite by client IP for 24 hours. Five recent failures returns HTTP 403. Failed admin unlock attempts use a separate SQLite ledger with the same 24-hour, five-failure rule.
